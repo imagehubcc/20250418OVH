@@ -1,0 +1,8 @@
+安装rust
+# 使用当前Python版本创建虚拟环境
+python -m venv venv
+venv\Scripts\activate
+
+# 在虚拟环境中使用预编译的二进制包
+pip install pydantic --only-binary :all:
+pip install -r requirements.txt --only-binary pydantic-core

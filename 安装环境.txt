@@ -1,0 +1,72 @@
+# OVH Titan Sniper 项目环境安装指南
+
+## 环境需求
+- Python 3.13（或更高版本）
+- Node.js 与 npm（最新稳定版）
+- Rust工具链（用于某些Python包的编译）
+
+## 后端环境配置
+
+### 1. 创建虚拟环境
+```
+# 进入后端目录
+cd backend
+
+# 创建虚拟环境
+python -m venv venv
+
+# 激活虚拟环境
+# Windows:
+venv\Scripts\activate
+# Linux/macOS:
+# source venv/bin/activate
+```
+
+### 2. 安装Python依赖
+```
+# 确保使用兼容版本的依赖
+pip install -r requirements.txt
+
+# 如果遇到问题，可尝试：
+pip install pydantic --only-binary :all:
+pip install -r requirements.txt
+```
+
+### 3. 后端启动
+```
+# 在激活的虚拟环境中
+uvicorn main:app --reload
+```
+
+## 前端环境配置
+
+### 1. 安装Node.js依赖
+```
+# 在项目根目录
+npm install
+```
+
+### 2. 前端启动
+```
+npm run dev
+```
+
+## 常见问题及解决方案
+
+### 1. pydantic-core编译问题
+如遇到pydantic-core编译问题，请确保：
+- 已安装Rust工具链（https://www.rust-lang.org/tools/install）
+- 使用了兼容的pydantic版本（>=2.11.0）
+- 尝试使用预编译的二进制包：`pip install pydantic --only-binary :all:`
+
+### 2. 依赖冲突问题
+若安装Node.js依赖时出现冲突，请检查package.json中的版本兼容性。
+特别是date-fns应使用^3.6.0版本以确保与react-day-picker兼容。
+
+### 3. 环境变量配置
+确保在后端目录中有正确配置的.env文件，包含必要的API密钥和配置信息。
+
+## 备注
+- 每次开发前都需要激活虚拟环境：`venv\Scripts\activate`
+- 完成后可用`deactivate`命令退出虚拟环境
+- 保持第三方包的更新，但注意版本兼容性 
