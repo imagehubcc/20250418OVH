@@ -12,7 +12,7 @@ import {
 } from '@/types';
 
 // API基础URL，在生产环境中应配置为实际后端地址
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'http://167.114.20.82:8000';
 
 // 创建Axios实例
 const api = axios.create({
@@ -196,6 +196,21 @@ export const apiService: ApiService = {
       return response.data;
     } catch (error) {
       console.error('创建任务失败:', error);
+      throw error;
+    }
+  },
+
+  // 添加无选项下单API
+  async createDefaultTask(name: string, planCode: string, datacenter: string): Promise<any> {
+    try {
+      const response = await api.post('/api/queue/new', {
+        name,
+        planCode,
+        datacenter
+      });
+      return response.data;
+    } catch (error) {
+      console.error('创建默认配置任务失败:', error);
       throw error;
     }
   },

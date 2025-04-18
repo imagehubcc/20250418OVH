@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -26,7 +26,8 @@ import {
   Check,
   RefreshCw,
   Bug,
-  X
+  X,
+  Badge
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { zhLocale } from '@/lib/locale';
@@ -36,6 +37,7 @@ import { apiService } from '@/services/api';
 import { toast } from '@/hooks/use-toast';
 import { useQueryClient } from '@tanstack/react-query';
 import ServerDebug from '../debug/ServerDebug';
+import { useMutation } from '@tanstack/react-query';
 
 interface ServerCardProps {
   server: FormattedServer;
@@ -77,10 +79,33 @@ const ServerCard: React.FC<ServerCardProps> = ({
   // 选中的数据中心
   const [selectedDatacenters, setSelectedDatacenters] = useState<string[]>([]);
   
+  // 添加一个状态来跟踪当前显示的是否为特定配置的可用性
+  const [showingConfigSpecificAvailability, setShowingConfigSpecificAvailability] = useState(false);
+  // 跟踪当前显示的配置信息（用于UI显示）
+  const [currentConfigDisplay, setCurrentConfigDisplay] = useState('');
+  
+  // 在组件顶部添加一个状态显示当前使用的FQN
+  const [currentFQN, setCurrentFQN] = useState<string>('');
+  
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   
   const isChecked = checkedServers.includes(server.planCode);
+  
+  /* 
+   * 检查服务器是否有多个真正可选的配置项
+   * 如果服务器在任何配置项上只有一个选择，那么这不是真正可选的
+   */
+  const hasRealOptions = useMemo(() => {
+    // 检查每个配置类型是否有多个选项可供选择
+    const hasMultipleMemoryOptions = server.memoryOptions && server.memoryOptions.length > 1;
+    const hasMultipleStorageOptions = server.storageOptions && server.storageOptions.length > 1;
+    const hasMultipleBandwidthOptions = server.bandwidthOptions && server.bandwidthOptions.length > 1;
+    const hasMultipleVrackOptions = server.vrackOptions && server.vrackOptions.length > 1;
+    
+    // 检查服务器是否有任何一项配置有多个选项
+    return hasMultipleMemoryOptions || hasMultipleStorageOptions || hasMultipleBandwidthOptions || hasMultipleVrackOptions;
+  }, [server.memoryOptions, server.storageOptions, server.bandwidthOptions, server.vrackOptions]);
   
   // 初始化默认选择项
   useEffect(() => {
@@ -115,6 +140,18 @@ const ServerCard: React.FC<ServerCardProps> = ({
         // 恢复确认状态
         setConfigConfirmed(true);
         setConfigChanged(false);
+        
+        // 构建当前配置显示信息
+        const configSummary = [];
+        if (savedConfig.memory?.display) configSummary.push(savedConfig.memory.display);
+        if (savedConfig.storage?.display) configSummary.push(savedConfig.storage.display);
+        if (savedConfig.bandwidth?.display) configSummary.push(savedConfig.bandwidth.display);
+        if (savedConfig.vrack?.display && savedConfig.vrack.display !== "无vRack") {
+          configSummary.push(savedConfig.vrack.display);
+        }
+        
+        setCurrentConfigDisplay(configSummary.join(' | '));
+        setShowingConfigSpecificAvailability(true);
         
         console.log(`从本地存储恢复了服务器 ${server.planCode} 的已确认配置`);
         return;
@@ -169,20 +206,48 @@ const ServerCard: React.FC<ServerCardProps> = ({
   
   // 在组件挂载时和每次检查状态变化时获取最新的上次检查时间
   useEffect(() => {
-    const storedTime = localStorage.getItem(`lastChecked_${server.planCode}`);
+    const storedTime = localStorage.getItem(`lastChecked_${generateConfigFQN()}`);
     if (storedTime) {
       setLocalLastChecked(storedTime);
     }
   }, [server.planCode, isChecked, checkedServers]);
   
-  // 获取可用性信息
+  // 添加useEffect更新FQN状态
+  useEffect(() => {
+    const fqn = generateConfigFQN();
+    setCurrentFQN(fqn);
+  }, [selectedMemory, selectedStorage, selectedBandwidth, selectedVrack, server.planCode]);
+  
+  // 修改为纯函数，移除状态更新
+  const generateConfigFQN = () => {
+    // 如果没有选择任何配置选项，直接返回planCode
+    if (!selectedMemory && !selectedStorage && !selectedBandwidth && !selectedVrack) {
+      return server.planCode;
+    }
+    
+    // 构建FQN: planCode.memory.storage
+    const parts = [server.planCode];
+    if (selectedMemory) parts.push(selectedMemory);
+    if (selectedStorage) parts.push(selectedStorage);
+    
+    return parts.join('.');
+  };
+  
+  // 修改getAvailabilityInfo函数，使用配置FQN获取可用性
   const getAvailabilityInfo = (datacenterId: string) => {
-    const serverAvailability = datacenterAvailability[server.planCode];
+    // 获取当前配置的FQN
+    const configFQN = generateConfigFQN();
+    
+    // 首先尝试使用FQN获取可用性数据
+    const fqnAvailability = datacenterAvailability[configFQN];
+    
+    // 如果找不到FQN的数据，回退到使用planCode
+    const serverAvailability = fqnAvailability || datacenterAvailability[server.planCode];
     
     // 将数据中心ID转为小写以匹配API返回的格式
     const dcIdLowerCase = datacenterId.toLowerCase();
     
-    console.log(`服务器 ${server.planCode} 数据中心 ${datacenterId} 获取可用性:`, 
+    console.log(`服务器 ${configFQN} 数据中心 ${datacenterId} 获取可用性:`, 
       serverAvailability ? serverAvailability[dcIdLowerCase] : 'no data',
       '完整可用性数据:', serverAvailability);
     
@@ -277,9 +342,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
     };
   };
   
-  // 检查数据中心是否已被检查可用性
+  // 修改hasBeenCheckedAvailability函数，使用FQN
   const hasBeenCheckedAvailability = (datacenterId: string) => {
-    const serverAvailability = datacenterAvailability[server.planCode];
+    const configFQN = generateConfigFQN();
+    const fqnAvailability = datacenterAvailability[configFQN];
+    const serverAvailability = fqnAvailability || datacenterAvailability[server.planCode];
+    
     if (!serverAvailability) return false;
     
     const dcIdLowerCase = datacenterId.toLowerCase();
@@ -356,26 +424,46 @@ const ServerCard: React.FC<ServerCardProps> = ({
       // 只有在用户点击确认按钮时，才会重新检查和设置确认状态
       setConfigChanged(true);
       
+      // 如果配置已变更，清除特定配置可用性显示状态
+      if (showingConfigSpecificAvailability) {
+        setShowingConfigSpecificAvailability(false);
+      }
+      
       console.log(`已选择 ${family} 配置: ${optionCode} (${displayText}), 配置已更改，需要确认整体配置`);
     } else {
       console.log(`重新选择了相同的 ${family} 配置: ${optionCode} (${displayText}), 无需更改状态`);
     }
   };
   
-  // 检查服务器所选配置的可用性并确认配置
+  // 修改handleCheckConfigAvailability函数，传递配置FQN
   const handleCheckConfigAvailability = async () => {
     setIsChecking(true);
     try {
       // 获取当前选择的配置选项
       const options = getSelectedOptions();
-      console.log("检查配置可用性，选择的配置:", options);
+      // 生成配置FQN
+      const configFQN = generateConfigFQN();
       
-      // 传递选项参数进行可用性检查
-      await onCheckAvailability(server.planCode, options);
+      console.log("检查配置可用性，选择的配置:", options, "FQN:", configFQN);
+      
+      // 传递FQN和选项参数进行可用性检查
+      await onCheckAvailability(configFQN, options);
       
       // 标记配置已确认并重置变更标记
       setConfigConfirmed(true);
       setConfigChanged(false);
+      
+      // 设置当前显示的是特定配置的可用性
+      setShowingConfigSpecificAvailability(true);
+      
+      // 构建当前配置显示信息
+      const configSummary = [];
+      if (displayedMemory) configSummary.push(displayedMemory);
+      if (displayedStorage) configSummary.push(displayedStorage);
+      if (displayedBandwidth) configSummary.push(displayedBandwidth);
+      if (displayedVrack && displayedVrack !== "无vRack") configSummary.push(displayedVrack);
+      
+      setCurrentConfigDisplay(configSummary.join(' | '));
       
       // 保存当前确认的配置，以便在用户离开页面后也能恢复
       const confirmedConfig = {
@@ -403,15 +491,21 @@ const ServerCard: React.FC<ServerCardProps> = ({
     }
   };
   
-  // 检查默认服务器可用性(不带配置选项)
+  // 修改handleCheckDefaultAvailability函数，使用服务器默认FQN
   const handleCheckDefaultAvailability = async () => {
     setIsChecking(true);
     try {
       // 不传递选项参数，使用默认配置检查可用性
+      // 对于默认配置，我们仍然使用planCode
       await onCheckAvailability(server.planCode);
       
       // 设置配置已确认标记（默认配置）
       setConfigConfirmed(true);
+      setConfigChanged(false);
+      
+      // 设置当前显示的是特定配置的可用性
+      setShowingConfigSpecificAvailability(true);
+      setCurrentConfigDisplay("默认配置");
       
       toast({
         title: "默认配置已确认",
@@ -458,29 +552,54 @@ const ServerCard: React.FC<ServerCardProps> = ({
         description: `正在将 ${server.name} 添加到抢购队列`,
       });
       
-      // 收集已选择的配置并转换为后端期望的格式
-      const frontendOptions = getSelectedOptions();
-      console.log("前端选项格式:", frontendOptions);
+      // 特殊服务器型号列表 - 需要使用无选项下单的服务器
+      const specialServers = ["25skc01", "24ska01"];
+      // 检查是否需要使用默认配置API：
+      // 1. 是特殊服务器型号 或
+      // 2. 没有真正的可选配置 或 
+      // 3. 用户没有改变过配置（只是点击了确认按钮）
+      const shouldUseDefaultApi = 
+        specialServers.includes(server.planCode) || 
+        !hasRealOptions || 
+        (configConfirmed && !configChanged);
       
       // 为每个选中的数据中心创建任务
       for (const datacenterId of selectedDatacenters) {
-        // 创建服务器配置对象
-        const serverConfig: ServerConfig = {
-          name: `${server.name} (${datacenterId})`,
-          planCode: server.planCode,
-          options: frontendOptions, // 前端选项现在已经是后端期望的格式
-          duration: "P1M", // ISO 8601 duration 格式，"P1M"代表一个月
-          datacenter: datacenterId,
-          quantity: 1, // 默认数量
-          os: "none_64.en", // 使用正确的默认操作系统值
-          maxRetries: -1, // 设置为无限重试
-          taskInterval: 60 // 设置为60秒间隔
-        };
-        
-        console.log(`为数据中心 ${datacenterId} 发送配置:`, serverConfig);
-        
-        // 调用API创建抢购任务
-        await apiService.createTask(serverConfig);
+        // 如果是特殊服务器或没有真正的可选配置，使用无选项下单API
+        if (shouldUseDefaultApi) {
+          const taskName = `${server.name} (${datacenterId})`;
+          console.log(`为服务器 ${server.planCode} 使用默认配置下单，数据中心: ${datacenterId}, 原因: ${
+            specialServers.includes(server.planCode) ? '特殊服务器型号' : 
+            !hasRealOptions ? '无多种配置选项' : 
+            '用户未更改默认配置'
+          }`);
+          
+          // 调用无选项下单API
+          await apiService.createDefaultTask(taskName, server.planCode, datacenterId);
+        } else {
+          // 正常下单流程
+          // 收集已选择的配置并转换为后端期望的格式
+          const frontendOptions = getSelectedOptions();
+          console.log("前端选项格式:", frontendOptions);
+          
+          // 创建服务器配置对象
+          const serverConfig: ServerConfig = {
+            name: `${server.name} (${datacenterId})`,
+            planCode: server.planCode,
+            options: frontendOptions, // 前端选项现在已经是后端期望的格式
+            duration: "P1M", // ISO 8601 duration 格式，"P1M"代表一个月
+            datacenter: datacenterId,
+            quantity: 1, // 默认数量
+            os: "none_64.en", // 使用正确的默认操作系统值
+            maxRetries: -1, // 设置为无限重试
+            taskInterval: 60 // 设置为60秒间隔
+          };
+          
+          console.log(`为数据中心 ${datacenterId} 发送配置:`, serverConfig);
+          
+          // 调用API创建抢购任务
+          await apiService.createTask(serverConfig);
+        }
       }
       
       // 更新任务列表
@@ -512,8 +631,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
   
   // 获取格式化的上次检查时间
   const getLastCheckedTime = (): string | null => {
+    const configFQN = generateConfigFQN();
     // 优先使用传入的lastChecked，其次使用本地state，最后尝试直接从localStorage读取
-    const timeToUse = lastChecked || localLastChecked || localStorage.getItem(`lastChecked_${server.planCode}`);
+    const timeToUse = lastChecked || localLastChecked || localStorage.getItem(`lastChecked_${configFQN}`);
     
     if (!timeToUse) return null;
     
@@ -524,25 +644,30 @@ const ServerCard: React.FC<ServerCardProps> = ({
     }
   };
   
-  // 判断是否有可选配置项
-  const hasOptions = (
-    (server.memoryOptions && server.memoryOptions.length > 0) ||
-    (server.storageOptions && server.storageOptions.length > 0) ||
-    (server.bandwidthOptions && server.bandwidthOptions.length > 0) ||
-    (server.vrackOptions && server.vrackOptions.length > 0)
-  );
+  // 特殊服务器型号列表 - 需要使用无选项下单的服务器
+  const specialServers = ["25skc01", "24ska01"];
+  // 检查是否是特殊服务器型号
+  const isSpecialServer = specialServers.includes(server.planCode);
   
   return (
     <Card className="tech-card h-full group">
       <CardHeader className="pb-2">
         <div className="flex justify-between">
-          <CardTitle className="text-base font-medium">
-            {server.name}
+          <CardTitle className="text-base font-medium flex items-center">
+            <span>{server.name}</span>
+            {(isSpecialServer || !hasRealOptions) && (
+              <div className="ml-2 text-xs px-2 py-0.5 rounded-md bg-amber-50 text-amber-600 border border-amber-200">默认配置</div>
+            )}
           </CardTitle>
           <Server className="h-5 w-5 text-tech-blue opacity-70" />
         </div>
         <CardDescription className="line-clamp-1" title={server.description}>
           {server.description || server.planCode}
+          {(isSpecialServer || !hasRealOptions) && (
+            <span className="text-xs text-amber-600 block mt-1">
+              此服务器将使用默认配置下单
+            </span>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -608,7 +733,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </div>
         
         {/* 显示可选配置参数 */}
-        {hasOptions && (
+        {hasRealOptions && (
           <div className="mt-2">
             <Button 
               variant="ghost" 
@@ -843,6 +968,16 @@ const ServerCard: React.FC<ServerCardProps> = ({
             <div className="text-tech-green">* 配置已确认，可以添加到抢购队列</div>
           )}
         </div>
+        
+        {/* 添加FQN显示在确认配置下方，仅在开发模式下显示 */}
+        {import.meta.env.DEV && showingConfigSpecificAvailability && configConfirmed && (
+          <div className="mt-1 p-1 bg-gray-800 rounded-md border border-dashed border-gray-700">
+            <div className="text-[10px] text-gray-400 flex items-center">
+              <Bug className="h-3 w-3 mr-1 text-gray-500" />
+              <span>当前FQN: <span className="text-gray-300 font-mono">{currentFQN}</span></span>
+            </div>
+          </div>
+        )}
       </CardContent>
       <CardFooter className="flex flex-col pt-2 pb-3 px-6">
         {/* 选择数据中心区域 */}
@@ -870,121 +1005,147 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </div>
           
           {/* 数据中心选择网格 */}
-          <div className="grid grid-cols-2 gap-3">
-            {DATACENTERS.map((dc) => {
-              const availInfo = getAvailabilityInfo(dc.code);
-              const isAvailable = availInfo.availability === 'available' || availInfo.availability === 'soon';
-              const isUnavailable = availInfo.availability === 'unavailable';
-              const isSelected = selectedDatacenters.includes(dc.code);
-              const hasBeenChecked = hasBeenCheckedAvailability(dc.code);
-              
-              // 区域颜色和图标
-              let regionColor = "bg-gray-700";
-              let regionTextColor = "text-gray-300";
-              let regionIcon = <Clock className="h-4 w-4 text-gray-400" />;
-              
-              if (dc.country.includes("法国") || dc.country.includes("德国") || dc.country.includes("英国")) {
-                regionColor = "bg-blue-900";
-                regionTextColor = "text-blue-300";
-                regionIcon = <Clock className="h-4 w-4 text-blue-400" />;
-              } else if (dc.country.includes("美国") || dc.country.includes("加拿大")) {
-                regionColor = "bg-amber-900";
-                regionTextColor = "text-amber-300";
-                regionIcon = <Clock className="h-4 w-4 text-amber-400" />;
-              } else if (dc.country.includes("新加坡") || dc.country.includes("澳大利亚") || dc.country.includes("亚")) {
-                regionColor = "bg-green-900";
-                regionTextColor = "text-green-300";
-                regionIcon = <Clock className="h-4 w-4 text-green-400" />;
-              }
-              
-              // 状态样式
-              let statusText = "未检查";
-              let statusColor = "text-gray-400";
-              let statusBg = "";
-              let statusBorder = "border-gray-700";
-              
-              if (hasBeenChecked) {
-                if (isAvailable) {
-                  statusText = "有货";
-                  statusColor = "text-tech-green";
-                  statusBg = "bg-tech-green/5";
-                  statusBorder = "border-tech-green/30";
-                } else if (isUnavailable) {
-                  statusText = "无货";
-                  statusColor = "text-tech-red";
-                  statusBg = "bg-tech-red/5";
-                  statusBorder = "border-tech-red/30";
-                } else {
-                  statusText = "未知";
-                  statusColor = "text-gray-400";
-                  statusBg = "bg-gray-500/5";
-                  statusBorder = "border-gray-700";
-                }
-              }
-              
-              // 选中状态样式覆盖
-              if (isSelected) {
-                statusBg = "bg-tech-blue/10";
-                statusBorder = "border-tech-blue";
-              }
-              
-              return (
-                <div 
-                  key={dc.code} 
-                  className={`relative cursor-pointer rounded-lg overflow-hidden transition-all duration-200 
-                              border ${statusBorder} ${statusBg} 
-                              hover:border-tech-blue/70 hover:shadow-md hover:shadow-tech-blue/10`}
-                  onClick={() => toggleDatacenter(dc.code)}
-                >
-                  {/* 顶部区域栏 */}
-                  <div className={`flex items-center justify-between px-2 py-1 ${regionColor}`}>
-                    <div className="flex items-center gap-1.5">
-                      {regionIcon}
-                      <span className={`text-sm font-semibold ${regionTextColor}`}>{dc.code}</span>
-                    </div>
-                    <span className="text-xs text-gray-300">{dc.country}</span>
+          <div className="flex flex-col gap-3">
+            {/* 添加当前配置可用性状态提示 */}
+            {showingConfigSpecificAvailability && (
+              <div className="px-3 py-2 bg-tech-blue/10 text-tech-blue rounded-md border border-tech-blue/30">
+                <div className="flex items-center text-xs">
+                  <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
+                  <span className="font-medium">显示的是已确认配置的可用性</span>
+                </div>
+                {currentConfigDisplay && (
+                  <div className="mt-1 text-[10px] text-tech-blue/80 pl-5">
+                    配置: {currentConfigDisplay}
                   </div>
-                  
-                  {/* 中间内容区 */}
-                  <div className="px-3 py-2.5 flex flex-col">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium truncate max-w-[120px]" title={dc.name}>
-                        {dc.name.split('·')[0]}
-                      </span>
-                      <span className={`text-xs font-medium ${statusColor}`}>
-                        {statusText}
-                      </span>
+                )}
+              </div>
+            )}
+            
+            {!showingConfigSpecificAvailability && configChanged && (
+              <div className="px-3 py-2 bg-yellow-500/10 text-yellow-600 rounded-md border border-yellow-500/30">
+                <div className="flex items-center text-xs">
+                  <AlertCircle className="h-3.5 w-3.5 mr-1.5" />
+                  <span className="font-medium">配置已变更，请点击"确认当前全部配置"</span>
+                </div>
+              </div>
+            )}
+            
+            <div className="grid grid-cols-2 gap-3">
+              {DATACENTERS.map((dc) => {
+                const availInfo = getAvailabilityInfo(dc.code);
+                const isAvailable = availInfo.availability === 'available' || availInfo.availability === 'soon';
+                const isUnavailable = availInfo.availability === 'unavailable';
+                const isSelected = selectedDatacenters.includes(dc.code);
+                const hasBeenChecked = hasBeenCheckedAvailability(dc.code);
+                
+                // 区域颜色和图标
+                let regionColor = "bg-gray-700";
+                let regionTextColor = "text-gray-300";
+                let regionIcon = <Clock className="h-4 w-4 text-gray-400" />;
+                
+                if (dc.country.includes("法国") || dc.country.includes("德国") || dc.country.includes("英国")) {
+                  regionColor = "bg-blue-900";
+                  regionTextColor = "text-blue-300";
+                  regionIcon = <Clock className="h-4 w-4 text-blue-400" />;
+                } else if (dc.country.includes("美国") || dc.country.includes("加拿大")) {
+                  regionColor = "bg-amber-900";
+                  regionTextColor = "text-amber-300";
+                  regionIcon = <Clock className="h-4 w-4 text-amber-400" />;
+                } else if (dc.country.includes("新加坡") || dc.country.includes("澳大利亚") || dc.country.includes("亚")) {
+                  regionColor = "bg-green-900";
+                  regionTextColor = "text-green-300";
+                  regionIcon = <Clock className="h-4 w-4 text-green-400" />;
+                }
+                
+                // 状态样式
+                let statusText = "未检查";
+                let statusColor = "text-gray-400";
+                let statusBg = "";
+                let statusBorder = "border-gray-700";
+                
+                if (hasBeenChecked) {
+                  if (isAvailable) {
+                    statusText = "有货";
+                    statusColor = "text-tech-green";
+                    statusBg = "bg-tech-green/5";
+                    statusBorder = "border-tech-green/30";
+                  } else if (isUnavailable) {
+                    statusText = "无货";
+                    statusColor = "text-tech-red";
+                    statusBg = "bg-tech-red/5";
+                    statusBorder = "border-tech-red/30";
+                  } else {
+                    statusText = "未知";
+                    statusColor = "text-gray-400";
+                    statusBg = "bg-gray-500/5";
+                    statusBorder = "border-gray-700";
+                  }
+                }
+                
+                // 选中状态样式覆盖
+                if (isSelected) {
+                  statusBg = "bg-tech-blue/10";
+                  statusBorder = "border-tech-blue";
+                }
+                
+                return (
+                  <div 
+                    key={dc.code} 
+                    className={`relative cursor-pointer rounded-lg overflow-hidden transition-all duration-200 
+                                border ${statusBorder} ${statusBg} 
+                                hover:border-tech-blue/70 hover:shadow-md hover:shadow-tech-blue/10`}
+                    onClick={() => toggleDatacenter(dc.code)}
+                  >
+                    {/* 顶部区域栏 */}
+                    <div className={`flex items-center justify-between px-2 py-1 ${regionColor}`}>
+                      <div className="flex items-center gap-1.5">
+                        {regionIcon}
+                        <span className={`text-sm font-semibold ${regionTextColor}`}>{dc.code}</span>
+                      </div>
+                      <span className="text-xs text-gray-300">{dc.country}</span>
                     </div>
                     
-                    {/* 底部时间戳或检查按钮 */}
-                    {hasBeenChecked ? (
-                      <div className="mt-1.5 text-[10px] text-gray-500">
-                        {getLastCheckedTime() || "刚刚检查"}
+                    {/* 中间内容区 */}
+                    <div className="px-3 py-2.5 flex flex-col">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium truncate max-w-[120px]" title={dc.name}>
+                          {dc.name.split('·')[0]}
+                        </span>
+                        <span className={`text-xs font-medium ${statusColor}`}>
+                          {statusText}
+                        </span>
                       </div>
-                    ) : (
-                      <button 
-                        className="mt-1.5 w-full flex items-center justify-center text-xs py-0.5 px-2 rounded 
-                                  bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleCheckDefaultAvailability();
-                        }}
-                      >
-                        <RefreshCw className="h-3 w-3 mr-1" />
-                        检查可用性
-                      </button>
+                      
+                      {/* 底部时间戳或检查按钮 */}
+                      {hasBeenChecked ? (
+                        <div className="mt-1.5 text-[10px] text-gray-500">
+                          {getLastCheckedTime() || "刚刚检查"}
+                        </div>
+                      ) : (
+                        <button 
+                          className="mt-1.5 w-full flex items-center justify-center text-xs py-0.5 px-2 rounded 
+                                    bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCheckDefaultAvailability();
+                          }}
+                        >
+                          <RefreshCw className="h-3 w-3 mr-1" />
+                          检查可用性
+                        </button>
+                      )}
+                    </div>
+                    
+                    {/* 选中标记 */}
+                    {isSelected && (
+                      <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-tech-blue flex items-center justify-center">
+                        <Check className="h-3 w-3 text-white" />
+                      </div>
                     )}
                   </div>
-                  
-                  {/* 选中标记 */}
-                  {isSelected && (
-                    <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-tech-blue flex items-center justify-center">
-                      <Check className="h-3 w-3 text-white" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
         

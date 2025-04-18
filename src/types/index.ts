@@ -164,6 +164,7 @@ export interface ApiService {
   getServerAvailability(planCode: string, options?: AddonOption[]): Promise<ServerAvailability[]>;
   getTasks(): Promise<TaskStatus[]>;
   createTask(config: ServerConfig): Promise<TaskStatus>;
+  createDefaultTask(name: string, planCode: string, datacenter: string): Promise<any>;
   deleteTask(taskId: string): Promise<void>;
   retryTask(taskId: string): Promise<void>;
   clearTasks(): Promise<void>;

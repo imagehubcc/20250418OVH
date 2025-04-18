@@ -11,7 +11,7 @@ import traceback
 import ovh
 import requests
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -120,6 +120,7 @@ class TaskStatus(BaseModel):
     nextRetryAt: Optional[str] = None
     message: Optional[str] = None
     taskInterval: int = 60  # 添加任务间隔属性，默认60秒
+    options: List[AddonOption] = []  # 添加选项字段，保存用户选择的配置
 
 # 添加配置持久化
 CONFIG_FILE = "config.json"
@@ -129,6 +130,20 @@ ORDERS_FILE = "orders.json"
 
 # 添加任务持久化功能
 TASKS_FILE = "tasks.json"
+
+# 添加全局字典，用于记录各服务器型号的问题参数
+# server_problem_params = {}
+# 记录服务器型号尝试次数的字典
+# server_attempt_counts = {}
+# 最大尝试次数，超过这个次数就使用完全默认配置
+# MAX_PARAM_ATTEMPTS = 3
+
+# 添加特定参数类型的初始列表，帮助系统更好地识别和分类参数
+# COMMON_PARAM_TYPES = {
+#     "memory": ["ram", "memory"],
+#     "storage": ["storage", "disk", "hdd", "ssd", "raid", "noraid"],
+#     "bandwidth": ["bandwidth", "traffic", "network"]
+# }
 
 # 保存配置到文件
 def save_config_to_file():
@@ -448,14 +463,29 @@ async def fetch_product_catalog(subsidiary: str = 'IE'):
         raise HTTPException(status_code=500, detail=f"获取产品目录失败: {str(e)}")
 
 # 检查服务器可用性
-async def check_availability(planCode: str):
+async def check_availability(planCode: str, options=None):
     client = get_ovh_client()
     
     try:
         # 添加详细日志记录
-        add_log("info", f"正在请求服务器 {planCode} 的可用性信息...")
+        add_log("info", f"正在请求服务器 {planCode} 的可用性信息，配置选项: {options}")
         
-        response = client.get(f'/dedicated/server/datacenter/availabilities', planCode=planCode)
+        # 基本查询参数
+        query_params = {"planCode": planCode}
+        
+        # 如果提供了选项，将其添加到OVH API请求中
+        if options and len(options) > 0:
+            # 将options添加到查询参数
+            add_log("info", f"使用配置选项检查可用性: {options}")
+            for option in options:
+                family = option.label  # 直接访问属性而不是使用get方法
+                value = option.value   # 直接访问属性而不是使用get方法
+                if family and value:
+                    # 添加到查询参数
+                    query_params[f"option.{family}"] = value
+        
+        # 使用构建好的查询参数调用API
+        response = client.get('/dedicated/server/datacenter/availabilities', **query_params)
         
         # 记录完整响应的关键信息
         response_summary = f"响应类型: {type(response)}, 是否为列表: {isinstance(response, list)}, "
@@ -542,7 +572,7 @@ async def order_server(task_id: str, config: ServerConfig):
     try:
         # 1. 检查可用性
         add_log("info", f"开始检查服务器 {config.planCode} 在 {config.datacenter} 的可用性")
-        availabilities = await check_availability(config.planCode)
+        availabilities = await check_availability(config.planCode, config.options)
         
         # 添加详细日志 - 记录原始响应
         add_log("info", f"获取到 {len(availabilities) if availabilities else 0} 条服务器可用性记录")
@@ -560,7 +590,59 @@ async def order_server(task_id: str, config: ServerConfig):
         # 添加详细的检查日志
         add_log("info", f"开始详细检查每个数据中心的可用性")
         
+        # 创建一个函数来比较FQN和当前选择的配置
+        def match_config_with_fqn(fqn, config):
+            # 提取当前用户选择的配置
+            memory_option = next((opt.value for opt in config.options if opt.label == 'memory'), None)
+            storage_option = next((opt.value for opt in config.options if opt.label == 'storage'), None)
+            bandwidth_option = next((opt.value for opt in config.options if opt.label == 'bandwidth'), None)
+            
+            # 提取FQN中的信息（通常是planCode.memory.storage格式）
+            fqn_parts = fqn.split('.')
+            
+            # 基本匹配：检查planCode
+            if not fqn.startswith(config.planCode):
+                return False, "planCode不匹配"
+                
+            # 如果没有选择任何选项，则使用第一个可用的配置
+            if not config.options or len(config.options) == 0:
+                return True, "使用默认配置（无选项）"
+                
+            # 检查内存配置
+            if memory_option and len(fqn_parts) > 1:
+                # 检查FQN中是否包含内存配置
+                if memory_option not in fqn:
+                    return False, f"内存配置不匹配: 选择={memory_option}, FQN={fqn}"
+                    
+            # 检查存储配置
+            if storage_option and len(fqn_parts) > 2:
+                # 检查FQN中是否包含存储配置
+                if storage_option not in fqn:
+                    return False, f"存储配置不匹配: 选择={storage_option}, FQN={fqn}"
+                    
+            # 带宽配置通常不在FQN中，所以不检查
+            
+            # 如果所有检查都通过，则匹配成功
+            return True, "配置完全匹配"
+            
+        # 首先尝试查找完全匹配的配置
+        exact_match_items = []
+        
         for item in availabilities:
+            fqn = item.get("fqn")
+            match_result, match_reason = match_config_with_fqn(fqn, config)
+            
+            if match_result:
+                add_log("info", f"找到匹配的配置: {fqn}, 原因: {match_reason}")
+                exact_match_items.append(item)
+            else:
+                add_log("info", f"跳过不匹配的配置: {fqn}, 原因: {match_reason}")
+                
+        # 如果找到了匹配的配置，则只在这些匹配项中查找可用的数据中心
+        items_to_check = exact_match_items if exact_match_items else availabilities
+        add_log("info", f"将在 {len(items_to_check)} 个匹配的配置中查找可用的数据中心")
+        
+        for item in items_to_check:
             fqn = item.get("fqn")
             datacenters = item.get("datacenters", [])
             
@@ -603,6 +685,8 @@ async def order_server(task_id: str, config: ServerConfig):
                         add_log("info", f"数据中心 {datacenter_name} 的服务器 {fqn} 状态为: {availability}，判定为不可用")
             
             if found_available:
+                # 记录成功找到的精确配置
+                add_log("info", f"在数据中心 {available_dc} 找到匹配的配置 {fqn} 可用")
                 break
         
         if not found_available:
@@ -623,8 +707,28 @@ async def order_server(task_id: str, config: ServerConfig):
             # 更新配置中的数据中心名称，使用API返回的原始名称
             config.datacenter = available_dc
             
-            # 发送Telegram通知
-            msg = f"{api_config.iam}: 在 {available_dc} 找到 {config.planCode} ({fqn}) 可用"
+            # 构建用户选择的配置信息字符串
+            user_config_display = config.planCode
+            if config.options and len(config.options) > 0:
+                # 提取内存、存储和带宽配置
+                memory_option = next((opt.value for opt in config.options if opt.label == 'memory'), None)
+                storage_option = next((opt.value for opt in config.options if opt.label == 'storage'), None)
+                bandwidth_option = next((opt.value for opt in config.options if opt.label == 'bandwidth'), None)
+                
+                # 构建配置显示字符串
+                config_parts = []
+                if memory_option:
+                    config_parts.append(memory_option)
+                if storage_option:
+                    config_parts.append(storage_option)
+                if bandwidth_option:
+                    config_parts.append(bandwidth_option)
+                
+                if config_parts:
+                    user_config_display = f"{config.planCode} ({'.'.join(config_parts)})"
+            
+            # 发送Telegram通知，使用用户选择的配置
+            msg = f"{api_config.iam}: 在 {available_dc} 找到 {user_config_display} 可用"
             send_telegram_msg(msg)
         
         # 2. 创建购物车
@@ -694,6 +798,11 @@ async def order_server(task_id: str, config: ServerConfig):
         # 6. 添加附加选项
         if config.options and len(config.options) > 0:
             update_task_status(task_id, "running", f"正在添加附加选项...")
+            # 记录所有要添加的选项
+            options_log = [f"{opt.label}={opt.value}" for opt in config.options]
+            add_log("info", f"将为服务器 {config.planCode} 添加以下选项: {', '.join(options_log)}")
+            
+            # 添加选项
             for option in config.options:
                 try:
                     add_log("info", f"添加选项: {option.label} = {option.value}")
@@ -704,6 +813,11 @@ async def order_server(task_id: str, config: ServerConfig):
                     client.post(f'/order/cart/{cart_id}/item/{item_id}/configuration', **option_payload)
                 except Exception as option_error:
                     add_log("error", f"添加选项 {option.label} 失败: {str(option_error)}")
+                    # 记录错误但继续尝试添加其他选项
+                    continue
+        else:
+            # 如果没有选项，使用默认配置
+            add_log("info", f"服务器 {config.planCode} 将使用默认配置下单，不添加任何自定义选项")
         
         # 7. 检查购物车
         update_task_status(task_id, "running", f"正在准备结账...")
@@ -750,7 +864,7 @@ async def order_server(task_id: str, config: ServerConfig):
         await broadcast_order_completed(history_entry)
         
         # 发送Telegram通知
-        success_msg = f"{api_config.iam}: 订单 {order_id_str} 已成功创建并支付！\n服务器: {fqn}\n数据中心: {config.datacenter}\n订单链接: {order_url_str}"
+        success_msg = f"{api_config.iam}: 订单 {order_id_str} 已成功创建并支付！\n服务器: {user_config_display}\n数据中心: {config.datacenter}\n订单链接: {order_url_str}"
         send_telegram_msg(success_msg)
         
         # 返回成功信息
@@ -877,7 +991,8 @@ async def task_execution_loop():
                 datacenter=task.datacenter,
                 name=task.name,
                 maxRetries=task.maxRetries,
-                taskInterval=task.taskInterval
+                taskInterval=task.taskInterval,
+                options=task.options  # 恢复选项信息
             )
             
             # 执行订购
@@ -956,22 +1071,22 @@ async def get_servers(subsidiary: str = 'IE'):
     return catalog
 
 @app.get("/api/servers/{plan_code}/availability")
-async def get_server_availability(plan_code: str, options: Optional[str] = None):
+async def get_server_availability(plan_code: str, request: Request):
     try:
-        add_log("info", f"获取服务器 {plan_code} 的可用性数据请求，选项: {options}")
+        add_log("info", f"GET请求获取服务器 {plan_code} 的可用性数据")
         
-        # 解析选项参数，如果有的话
-        parsed_options = []
-        if options:
-            try:
-                parsed_options = json.loads(options)
-                add_log("info", f"解析到选项参数: {parsed_options}")
-            except json.JSONDecodeError as e:
-                add_log("error", f"解析选项参数失败: {str(e)}")
-                raise HTTPException(status_code=400, detail=f"选项参数格式无效: {str(e)}")
+        # 尝试从请求体中获取选项数据
+        options = None
+        try:
+            body = await request.json()
+            options = body.get("options", [])
+            add_log("info", f"从GET请求体中解析出选项: {options}")
+        except:
+            # 如果无法解析请求体，则使用默认空选项
+            add_log("info", f"GET请求没有提供选项或无法解析请求体，使用默认配置")
         
-        # 调用原有的检查可用性函数
-        result = await check_availability(plan_code)
+        # 调用检查可用性函数并传递选项
+        result = await check_availability(plan_code, options)
         return result
     except Exception as e:
         add_log("error", f"获取服务器 {plan_code} 可用性数据时出错: {str(e)}")
@@ -987,7 +1102,7 @@ async def post_server_availability(plan_code: str, data: dict):
         add_log("info", f"从请求体中解析出选项: {options}")
         
         # 调用原有的检查可用性函数
-        result = await check_availability(plan_code)
+        result = await check_availability(plan_code, options)
         return result
     except Exception as e:
         add_log("error", f"POST获取服务器 {plan_code} 可用性数据时出错: {str(e)}")
@@ -1017,12 +1132,13 @@ async def create_task(config: ServerConfig):
         maxRetries=config.maxRetries,
         nextRetryAt=next_check,
         message="任务已创建，等待执行",
-        taskInterval=config.taskInterval if config.taskInterval else 60
+        taskInterval=config.taskInterval if config.taskInterval else 60,
+        options=config.options  # 保存选项信息
     )
     
     # 先保存任务
     tasks[task_id] = new_task
-    add_log("info", f"创建了新任务: {config.name} ({task_id}), 数据中心: {datacenter}, 重试间隔: {new_task.taskInterval}秒, 最大重试次数: {new_task.maxRetries}")
+    add_log("info", f"创建了新任务: {config.name} ({task_id}), 数据中心: {datacenter}, 重试间隔: {new_task.taskInterval}秒, 最大重试次数: {new_task.maxRetries}, 配置选项: {len(new_task.options)}个")
     
     # 保存任务到文件，确保持久化
     save_tasks_to_file()
@@ -1359,6 +1475,54 @@ async def set_telegram_config(config: dict):
     
     add_log("info", "Telegram通知配置已更新")
     return {"message": "Telegram通知配置已更新"}
+
+# 添加一个新的端点，用于直接使用默认配置下单
+@app.post("/api/queue/new")
+async def create_default_task(data: dict):
+    """
+    创建一个不带任何可选配置的任务
+    请求体格式:
+    {
+        "name": "KS-A | Intel i7-6700k",  # 服务器名称
+        "planCode": "24ska01",            # 服务器型号代码
+        "datacenter": "gra"               # 数据中心
+    }
+    """
+    try:
+        # 从请求体中提取基本信息
+        name = data.get("name")
+        plan_code = data.get("planCode")
+        datacenter = data.get("datacenter")
+        
+        # 验证必要参数
+        if not all([name, plan_code, datacenter]):
+            raise HTTPException(status_code=400, detail="缺少必要参数: name, planCode, datacenter")
+        
+        # 创建服务器配置对象，不包含任何可选参数
+        config = ServerConfig(
+            planCode=plan_code,
+            datacenter=datacenter,
+            name=name,
+            maxRetries=-1,  # 无限重试
+            taskInterval=60,  # 默认60秒
+            options=[]  # 空列表，不传递任何配置选项
+        )
+        
+        # 记录日志
+        add_log("info", f"使用默认配置创建任务: {name} (型号: {plan_code}, 数据中心: {datacenter})")
+        
+        # 调用现有的创建任务函数
+        new_task = await create_task(config)
+        
+        return {
+            "status": "success",
+            "message": f"已使用默认配置创建任务: {name}",
+            "task_id": new_task.id
+        }
+        
+    except Exception as e:
+        add_log("error", f"创建默认配置任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
 
 # 运行服务器
 if __name__ == "__main__":

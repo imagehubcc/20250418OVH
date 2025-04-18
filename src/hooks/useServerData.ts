@@ -277,14 +277,16 @@ export function useServerData() {
   const servers = catalog ? formatServerData(catalog) : [];
   
   // 获取单个服务器可用性信息
-  const fetchAvailability = useCallback(async (server: FormattedServer, options?: AddonOption[]) => {
+  const fetchAvailability = useCallback(async (server: FormattedServer, options?: AddonOption[], customKey?: string) => {
     if (!server || !server.planCode) {
       console.warn('尝试获取无效服务器的可用性');
       return [];
     }
     
     try {
-      console.log(`正在获取服务器 ${server.planCode} 的可用性数据...`);
+      // 使用自定义键或服务器planCode作为存储键
+      const storageKey = customKey || server.planCode;
+      console.log(`正在获取服务器 ${storageKey} 的可用性数据...`);
       
       // 转换选项格式从{family,option}到{label,value}
       let convertedOptions;
@@ -304,7 +306,7 @@ export function useServerData() {
         availabilities = await apiService.getServerAvailability(server.planCode);
       }
       
-      console.log(`已接收服务器 ${server.planCode} 的可用性数据:`, JSON.stringify(availabilities, null, 2));
+      console.log(`已接收服务器 ${storageKey} 的可用性数据:`, JSON.stringify(availabilities, null, 2));
       
       // 直接在本地制作数据中心映射
       const dcAvailability: Record<string, string> = {};
@@ -331,12 +333,12 @@ export function useServerData() {
         }
       }
       
-      console.log(`服务器 ${server.planCode} 最终数据中心可用性映射:`, dcAvailability);
+      console.log(`服务器 ${storageKey} 最终数据中心可用性映射:`, dcAvailability);
       
       // 使用函数式更新确保获取最新状态
       setDatacenterAvailability(prev => ({
         ...prev,
-        [server.planCode]: dcAvailability
+        [storageKey]: dcAvailability
       }));
       
       // 标记服务器为已检查
@@ -346,7 +348,7 @@ export function useServerData() {
       
       // 设置上次检查时间
       const now = new Date().toISOString();
-      localStorage.setItem(`lastChecked_${server.planCode}`, now);
+      localStorage.setItem(`lastChecked_${storageKey}`, now);
       
       return availabilities;
     } catch (error) {
@@ -357,7 +359,7 @@ export function useServerData() {
       }
       return [];
     }
-  }, [checkedServers, setCheckedServers, setDatacenterAvailability]);
+  }, [checkedServers]);
   
   // 批量检查所有服务器的可用性
   const checkAllServersAvailability = useCallback(async () => {
@@ -460,14 +462,17 @@ export function useServerData() {
     }
     
     try {
-      const server = servers.find(s => s.planCode === planCode);
-      if (!server) {
-        console.warn(`找不到planCode为 ${planCode} 的服务器`);
+      // 从planCode中提取基本服务器ID（如果是FQN格式）
+      const basePlanCode = planCode.split('.')[0];
+      const serverData = servers.find(s => s.planCode === basePlanCode);
+      
+      if (!serverData) {
+        console.warn(`找不到planCode为 ${basePlanCode} 的服务器`);
         return [];
       }
       
-      // 传递配置选项
-      return await fetchAvailability(server, options);
+      // 传递配置选项和完整FQN作为存储键
+      return await fetchAvailability(serverData, options, planCode);
     } catch (error) {
       console.error(`检查服务器 ${planCode} 可用性失败:`, error);
       return [];
