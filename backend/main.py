@@ -30,6 +30,43 @@ logging.basicConfig(
 
 logger = logging.getLogger("ovh-sniper")
 
+# 创建API通信日志处理器
+# 确保logs目录存在
+os.makedirs("logs", exist_ok=True)
+api_logger = logging.getLogger("ovh-api-communication")
+api_logger.setLevel(logging.DEBUG)
+api_handler = logging.FileHandler("logs/api_communication.log")
+api_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+api_logger.addHandler(api_handler)
+api_logger.propagate = False  # 防止API日志也输出到主日志中
+
+# 为每个任务创建单独的日志处理函数
+def get_task_logger(task_id):
+    """为特定任务创建或获取日志记录器"""
+    if not task_id:
+        return api_logger
+        
+    # 确保任务日志目录存在
+    task_log_dir = os.path.join("logs", "tasks")
+    os.makedirs(task_log_dir, exist_ok=True)
+    
+    # 获取任务特定的记录器
+    task_logger = logging.getLogger(f"task-{task_id}")
+    
+    # 如果已经配置过处理器，直接返回
+    if task_logger.handlers:
+        return task_logger
+        
+    # 配置新的记录器
+    task_logger.setLevel(logging.DEBUG)
+    log_file = os.path.join(task_log_dir, f"{task_id}.log")
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    task_logger.addHandler(file_handler)
+    task_logger.propagate = False  # 防止日志重复输出
+    
+    return task_logger
+
 # 配置设置
 class Settings(BaseSettings):
     APP_KEY: str = ""
@@ -48,6 +85,84 @@ class Settings(BaseSettings):
         env_file = ".env"
 
 settings = Settings()
+
+# 自定义OVH客户端类，用于记录API通信
+class LoggingOVHClient(ovh.Client):
+    def __init__(self, *args, **kwargs):
+        self.task_id = kwargs.pop('task_id', None)  # 提取并移除task_id
+        super().__init__(*args, **kwargs)
+        # 获取适当的日志记录器
+        self.logger = get_task_logger(self.task_id)
+    
+    # 重写OVH客户端的call方法，使用与原始库相同的方法签名
+    def call(self, method, path, data=None, need_auth=True):
+        """
+        重写原始客户端的call方法，添加日志记录功能
+        :param method: HTTP方法 (GET, POST, PUT, DELETE)
+        :param path: API路径
+        :param data: 请求数据（对于POST和PUT）
+        :param need_auth: 是否需要身份验证
+        :return: API响应
+        """
+        request_id = str(uuid.uuid4())[:8]
+        task_prefix = f"[任务: {self.task_id}]" if self.task_id else ""
+        
+        # 记录请求信息
+        self.logger.info(f"{task_prefix} 请求 {request_id}: {method} {path}")
+        if data:
+            # 隐藏可能的敏感信息
+            safe_data = self._sanitize_params(data) if isinstance(data, dict) else data
+            data_str = json.dumps(safe_data, ensure_ascii=False) if isinstance(safe_data, dict) else str(safe_data)
+            self.logger.info(f"{task_prefix} 请求 {request_id} 数据: {data_str}")
+        
+        try:
+            # 调用原始方法
+            start_time = time.time()
+            result = super().call(method, path, data, need_auth)
+            end_time = time.time()
+            
+            # 记录响应信息
+            duration = round((end_time - start_time) * 1000)
+            self.logger.info(f"{task_prefix} 响应 {request_id}: 耗时 {duration}ms")
+            
+            # 尝试记录响应内容，但要避免记录过大的响应
+            if result:
+                # 同时记录到主日志和任务特定日志
+                api_logger.info(f"{task_prefix} 响应概要 {request_id}: OVH成功返回数据")
+                
+                # 详细内容记录到任务特定日志
+                result_str = str(result)
+                if len(result_str) > 5000:  # 对于非常大的响应，只记录概要
+                    result_summary = f"{result_str[:4997]}... (总长度: {len(result_str)}字节)"
+                    self.logger.info(f"{task_prefix} 响应 {request_id} 内容(截断): {result_summary}")
+                else:
+                    self.logger.info(f"{task_prefix} 响应 {request_id} 内容: {result_str}")
+            
+            return result
+        except Exception as e:
+            # 记录错误信息
+            error_message = f"{task_prefix} 请求 {request_id} 失败: {str(e)}"
+            self.logger.error(error_message)
+            api_logger.error(error_message)  # 同时记录到主日志
+            
+            error_details = f"{task_prefix} 错误详情: {traceback.format_exc()}"
+            self.logger.error(error_details)
+            api_logger.error(error_details)  # 同时记录到主日志
+            raise
+    
+    def _sanitize_params(self, params):
+        """去除参数中可能的敏感信息"""
+        if not isinstance(params, dict):
+            return params
+            
+        safe_params = params.copy()
+        sensitive_keys = ['password', 'token', 'secret', 'key']
+        
+        for k, v in safe_params.items():
+            if any(sensitive in k.lower() for sensitive in sensitive_keys) and v:
+                safe_params[k] = "******"
+        
+        return safe_params
 
 # 数据模型
 class ServerAvailability(BaseModel):
@@ -377,7 +492,7 @@ def add_log(level: str, message: str):
     }))
 
 # 初始化OVH客户端
-def get_ovh_client():
+def get_ovh_client(task_id=None):
     global api_config, ovh_client
     
     if not api_config:
@@ -385,11 +500,12 @@ def get_ovh_client():
     
     if not ovh_client:
         try:
-            ovh_client = ovh.Client(
+            ovh_client = LoggingOVHClient(
                 endpoint=api_config.endpoint,
                 application_key=api_config.appKey,
                 application_secret=api_config.appSecret,
-                consumer_key=api_config.consumerKey
+                consumer_key=api_config.consumerKey,
+                task_id=task_id
             )
             add_log("info", "OVH客户端初始化成功")
         except Exception as e:
@@ -463,8 +579,8 @@ async def fetch_product_catalog(subsidiary: str = 'IE'):
         raise HTTPException(status_code=500, detail=f"获取产品目录失败: {str(e)}")
 
 # 检查服务器可用性
-async def check_availability(planCode: str, options=None):
-    client = get_ovh_client()
+async def check_availability(planCode: str, options=None, task_id=None):
+    client = get_ovh_client(task_id)
     
     try:
         # 添加详细日志记录
@@ -484,7 +600,7 @@ async def check_availability(planCode: str, options=None):
                     # 添加到查询参数
                     query_params[f"option.{family}"] = value
         
-        # 使用构建好的查询参数调用API
+        # 使用构建好的查询参数调用API - 确保使用关键字参数
         response = client.get('/dedicated/server/datacenter/availabilities', **query_params)
         
         # 记录完整响应的关键信息
@@ -526,6 +642,7 @@ async def check_availability(planCode: str, options=None):
         return response
     except Exception as e:
         add_log("error", f"检查服务器 {planCode} 可用性失败: {str(e)}")
+        add_log("error", f"错误详情: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"检查可用性失败: {str(e)}")
 
 # 添加一个调试端点，返回可用性数据的详细信息
@@ -563,8 +680,15 @@ async def broadcast_order_failed(order: OrderHistory):
 
 # 订购服务器
 async def order_server(task_id: str, config: ServerConfig):
-    client = get_ovh_client()
+    client = get_ovh_client(task_id)
     cart_id = None
+    task_logger = get_task_logger(task_id)
+    
+    # 记录任务开始详情
+    task_logger.info(f"开始处理任务 {task_id}")
+    task_logger.info(f"服务器配置: planCode={config.planCode}, datacenter={config.datacenter}, 选项数量={len(config.options)}")
+    if config.options:
+        task_logger.info(f"选项详情: {json.dumps([opt.dict() for opt in config.options], ensure_ascii=False)}")
     
     # 更新任务状态
     update_task_status(task_id, "running", "正在检查服务器可用性...")
@@ -572,9 +696,11 @@ async def order_server(task_id: str, config: ServerConfig):
     try:
         # 1. 检查可用性
         add_log("info", f"开始检查服务器 {config.planCode} 在 {config.datacenter} 的可用性")
-        availabilities = await check_availability(config.planCode, config.options)
+        task_logger.info(f"开始检查服务器 {config.planCode} 在 {config.datacenter} 的可用性")
+        availabilities = await check_availability(config.planCode, config.options, task_id)
         
         # 添加详细日志 - 记录原始响应
+        task_logger.info(f"获取到 {len(availabilities) if availabilities else 0} 条服务器可用性记录")
         add_log("info", f"获取到 {len(availabilities) if availabilities else 0} 条服务器可用性记录")
         
         # 检查指定数据中心是否可用
@@ -583,12 +709,15 @@ async def order_server(task_id: str, config: ServerConfig):
         fqn = None
         
         if not availabilities:
-            add_log("error", f"未找到计划代码 {config.planCode} 的可用性信息")
-            update_task_status(task_id, "error", f"未找到计划代码 {config.planCode} 的可用性信息")
+            error_msg = f"未找到计划代码 {config.planCode} 的可用性信息"
+            add_log("error", error_msg)
+            task_logger.error(error_msg)
+            update_task_status(task_id, "error", error_msg)
             return
         
         # 添加详细的检查日志
         add_log("info", f"开始详细检查每个数据中心的可用性")
+        task_logger.info(f"开始详细检查每个数据中心的可用性")
         
         # 创建一个函数来比较FQN和当前选择的配置
         def match_config_with_fqn(fqn, config):
@@ -733,110 +862,219 @@ async def order_server(task_id: str, config: ServerConfig):
         
         # 2. 创建购物车
         update_task_status(task_id, "running", f"正在创建购物车...")
+        task_logger.info("开始创建购物车...")
         cart_result = client.post('/order/cart', ovhSubsidiary=api_config.zone)
         cart_id = cart_result["cartId"]
         add_log("info", f"购物车创建成功，ID: {cart_id}")
+        task_logger.info(f"购物车创建成功，ID: {cart_id}")
         
         # 3. 绑定购物车
         update_task_status(task_id, "running", f"正在绑定购物车...")
+        task_logger.info(f"正在绑定购物车 {cart_id}...")
         client.post(f'/order/cart/{cart_id}/assign')
         add_log("info", "购物车绑定成功")
+        task_logger.info("购物车绑定成功")
         
         # 4. 添加基础商品到购物车
         update_task_status(task_id, "running", f"正在添加商品到购物车...")
+        task_logger.info(f"正在添加商品 {config.planCode} 到购物车...")
         item_payload = {
             "planCode": config.planCode,
             "pricingMode": "default",
             "duration": config.duration,
             "quantity": config.quantity
         }
+        task_logger.info(f"商品参数: {json.dumps(item_payload, ensure_ascii=False)}")
         
         item_result = client.post(f'/order/cart/{cart_id}/eco', **item_payload)
         item_id = item_result["itemId"]
         add_log("info", f"商品添加成功，项目 ID: {item_id}")
+        task_logger.info(f"商品添加成功，项目 ID: {item_id}")
         
         # 5. 获取必需的配置项
         update_task_status(task_id, "running", f"正在配置购物车项目...")
+        task_logger.info(f"正在获取商品 {item_id} 的必需配置项...")
         required_config = client.get(f'/order/cart/{cart_id}/item/{item_id}/requiredConfiguration')
+        task_logger.info(f"获取到 {len(required_config)} 个必需配置项")
         
         # 准备配置字典
         configurations_to_set = {}
         region_value = None
         
-        # 查找'region'配置项
+        # 定义数据中心与区域的映射关系
+        EU_DATACENTERS = ['gra', 'rbx', 'sbg', 'eri', 'lim', 'gra1', 'gra2', 'gra3', 'rbx1', 'rbx2', 'rbx3', 'sbg1', 'sbg2', 'sbg3']
+        CANADA_DATACENTERS = ['bhs', 'bhs1', 'bhs2', 'bhs3', 'bhs4', 'bhs5', 'bhs6', 'bhs7', 'bhs8', 'beauharnois']
+        
+        # 根据数据中心确定应该使用的区域
+        region_by_dc = None
+        dc = config.datacenter.lower() if config.datacenter else None
+        
+        if dc:
+            if any(dc.startswith(prefix) for prefix in EU_DATACENTERS):
+                region_by_dc = "europe"
+                task_logger.info(f"根据数据中心 {config.datacenter} 推断区域应为 europe")
+            elif any(dc.startswith(prefix) for prefix in CANADA_DATACENTERS):
+                region_by_dc = "canada"
+                task_logger.info(f"根据数据中心 {config.datacenter} 推断区域应为 canada")
+        
+        # 查找'region'配置项并智能选择匹配的值
         for conf in required_config:
             label = conf.get("label")
+            task_logger.info(f"检查必需配置项: {label}, 类型: {conf.get('type')}")
             if label == "region":
                 allowed_values = conf.get("allowedValues")
                 if allowed_values:
-                    region_value = allowed_values[0]
+                    # 如果有基于数据中心的推断区域，优先使用它（前提是它在允许的值中）
+                    if region_by_dc and region_by_dc in allowed_values:
+                        region_value = region_by_dc
+                    else:
+                        # 否则使用第一个允许的值
+                        region_value = allowed_values[0]
+                        task_logger.info(f"无法根据数据中心推断区域或推断的区域不在允许范围内，使用默认值")
+                    
                     configurations_to_set["region"] = region_value
+                    task_logger.info(f"找到region配置项，允许的值: {allowed_values}，将使用: {region_value}")
         
         # 添加其他必需配置
         configurations_to_set["dedicated_datacenter"] = config.datacenter
         configurations_to_set["dedicated_os"] = config.os
+        task_logger.info(f"将设置以下配置: {json.dumps(configurations_to_set, ensure_ascii=False)}")
         
         # 配置购物车中的商品
         for label, value in configurations_to_set.items():
             if value is None:
                 add_log("warning", f"配置项 {label} 的值是 None，跳过设置")
+                task_logger.warning(f"配置项 {label} 的值是 None，跳过设置")
                 continue
             
             try:
                 add_log("info", f"配置项目 {item_id}: 设置 {label} = {value}")
+                task_logger.info(f"正在设置配置项: {label} = {value}")
                 client.post(
                     f'/order/cart/{cart_id}/item/{item_id}/configuration',
                     label=label,
                     value=str(value)
                 )
+                task_logger.info(f"成功设置配置项: {label} = {value}")
             except Exception as config_error:
-                add_log("error", f"配置 {label} = {value} 失败: {str(config_error)}")
+                error_msg = f"配置 {label} = {value} 失败: {str(config_error)}"
+                add_log("error", error_msg)
+                task_logger.error(error_msg)
                 if label == "dedicated_datacenter":
-                    update_task_status(task_id, "error", f"关键配置项 {label} 设置失败，中止购买")
-                    raise Exception(f"关键配置项 {label} 设置失败")
+                    critical_error = f"关键配置项 {label} 设置失败，中止购买"
+                    update_task_status(task_id, "error", critical_error)
+                    task_logger.error(critical_error)
+                    raise Exception(critical_error)
         
         # 6. 添加附加选项
         if config.options and len(config.options) > 0:
             update_task_status(task_id, "running", f"正在添加附加选项...")
+            task_logger.info(f"开始添加 {len(config.options)} 个附加选项")
             # 记录所有要添加的选项
-            options_log = [f"{opt.label}={opt.value}" for opt in config.options]
-            add_log("info", f"将为服务器 {config.planCode} 添加以下选项: {', '.join(options_log)}")
+            options_log = []
+            for opt in config.options:
+                # 兼容前端格式，获取正确的label/value
+                label = None
+                value = None
+                
+                # 获取label(后端)或family(前端)
+                if hasattr(opt, 'label') and opt.label:
+                    label = opt.label
+                elif hasattr(opt, 'family') and opt.family:
+                    label = opt.family
+                elif isinstance(opt, dict):
+                    label = opt.get('label') or opt.get('family')
+                    
+                # 获取value(后端)或option(前端)
+                if hasattr(opt, 'value') and opt.value:
+                    value = opt.value
+                elif hasattr(opt, 'option') and opt.option:
+                    value = opt.option
+                elif isinstance(opt, dict):
+                    value = opt.get('value') or opt.get('option')
+                
+                if label and value:
+                    options_log.append(f"{label}={value}")
+            
+            options_str = ', '.join(options_log)
+            add_log("info", f"将为服务器 {config.planCode} 添加以下选项: {options_str}")
+            task_logger.info(f"将为服务器 {config.planCode} 添加以下选项: {options_str}")
             
             # 添加选项
             for option in config.options:
                 try:
-                    add_log("info", f"添加选项: {option.label} = {option.value}")
+                    # 兼容前端格式，获取正确的label/value
+                    label = None
+                    value = None
+                    
+                    # 获取label(后端)或family(前端)
+                    if hasattr(option, 'label') and option.label:
+                        label = option.label
+                    elif hasattr(option, 'family') and option.family:
+                        label = option.family
+                    elif isinstance(option, dict):
+                        label = option.get('label') or option.get('family')
+                        
+                    # 获取value(后端)或option(前端)
+                    if hasattr(option, 'value') and option.value:
+                        value = option.value
+                    elif hasattr(option, 'option') and option.option:
+                        value = option.option
+                    elif isinstance(option, dict):
+                        value = option.get('value') or option.get('option')
+                    
+                    if not label or not value:
+                        warning_msg = f"选项缺少必要属性，已跳过: {option}"
+                        add_log("warning", warning_msg)
+                        task_logger.warning(warning_msg)
+                        continue
+                    
+                    add_log("info", f"添加选项: {label} = {value}")
+                    task_logger.info(f"添加选项: {label} = {value}")
                     option_payload = {
-                        "label": option.label,
-                        "value": option.value
+                        "label": label,
+                        "value": value
                     }
                     client.post(f'/order/cart/{cart_id}/item/{item_id}/configuration', **option_payload)
+                    task_logger.info(f"成功添加选项: {label} = {value}")
                 except Exception as option_error:
-                    add_log("error", f"添加选项 {option.label} 失败: {str(option_error)}")
+                    error_msg = f"添加选项 {label} 失败: {str(option_error)}"
+                    add_log("error", error_msg)
+                    task_logger.error(error_msg)
                     # 记录错误但继续尝试添加其他选项
                     continue
         else:
             # 如果没有选项，使用默认配置
-            add_log("info", f"服务器 {config.planCode} 将使用默认配置下单，不添加任何自定义选项")
+            default_msg = f"服务器 {config.planCode} 将使用默认配置下单，不添加任何自定义选项"
+            add_log("info", default_msg)
+            task_logger.info(default_msg)
         
         # 7. 检查购物车
         update_task_status(task_id, "running", f"正在准备结账...")
+        task_logger.info("正在准备结账，获取购物车摘要...")
         cart_summary = client.get(f'/order/cart/{cart_id}')
+        task_logger.info(f"购物车摘要: 项目数量={len(cart_summary.get('items', []))}, 总金额={cart_summary.get('prices', {}).get('withTax', {}).get('text', 'N/A')}")
+        
         checkout_info = client.get(f'/order/cart/{cart_id}/checkout')
+        task_logger.info(f"结账信息获取成功，准备执行结账")
         
         # 8. 执行结账
         update_task_status(task_id, "running", f"正在执行结账...")
+        task_logger.info("正在执行结账请求...")
         checkout_payload = {
             "autoPayWithPreferredPaymentMethod": False,
             "waiveRetractationPeriod": True
         }
+        task_logger.info(f"结账参数: {json.dumps(checkout_payload, ensure_ascii=False)}")
         
         checkout_result = client.post(f'/order/cart/{cart_id}/checkout', **checkout_payload)
         add_log("info", "结账请求已提交！")
+        task_logger.info("结账请求已提交，获取订单详情")
         
         # 9. 更新任务状态和订单历史
         order_url = checkout_result.get("url", "N/A")
         order_id = checkout_result.get("orderId")
+        task_logger.info(f"订单创建成功! 订单ID: {order_id}, 订单URL: {order_url}")
         
         # 使用安全转换函数处理字段
         order_id_str = safe_str(order_id, "N/A")
@@ -875,6 +1113,22 @@ async def order_server(task_id: str, config: ServerConfig):
         error_msg = f"订购服务器失败: {str(e)}"
         add_log("error", error_msg)
         
+        # 记录详细日志
+        task_logger.error(error_msg)
+        task_logger.error(f"完整错误堆栈: {traceback.format_exc()}")
+        
+        # 记录OVH查询ID
+        if "OVH-Query-ID:" in str(e):
+            try:
+                query_id = str(e).split("OVH-Query-ID:")[1].strip()
+                task_logger.error(f"OVH查询ID: {query_id}")
+            except:
+                task_logger.error("无法解析OVH查询ID")
+        
+        # 记录购物车信息
+        if cart_id:
+            task_logger.error(f"购物车ID: {cart_id}")
+        
         # 更新任务状态
         update_task_status(task_id, "error", error_msg)
         
@@ -902,15 +1156,18 @@ async def order_server(task_id: str, config: ServerConfig):
         )
         # 使用新函数添加订单并持久化
         add_order(history_entry)
+        task_logger.info(f"已创建失败订单记录: {history_entry.id}")
         
         # 广播订单失败消息
         await broadcast_order_failed(history_entry)
+        task_logger.info("已广播订单失败消息")
         
         # 发送Telegram通知
         error_tg_msg = f"{api_config.iam}: OVH 操作失败 - {str(e)}"
         if cart_id:
             error_tg_msg += f"\nCart ID: {cart_id}"
         send_telegram_msg(error_tg_msg)
+        task_logger.info("已发送Telegram失败通知")
         
         # 返回错误信息
         return history_entry

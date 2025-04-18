@@ -12,7 +12,7 @@ import {
 } from '@/types';
 
 // API基础URL，在生产环境中应配置为实际后端地址
-const API_BASE_URL = 'http://167.114.20.82:8000';
+const API_BASE_URL = 'http://localhost:8000';
 
 // 创建Axios实例
 const api = axios.create({
