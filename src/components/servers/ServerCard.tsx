@@ -358,35 +358,50 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const getSelectedOptions = () => {
     const options = [];
     
-    if (selectedMemory) {
-      options.push({ 
-        label: 'memory', 
-        value: selectedMemory 
+    // 记录原始API值和显示值的对应关系
+    console.log("准备服务器配置选项 - 使用原始API值:");
+    
+    // 内存选项
+    if (selectedMemory && selectedMemory !== 'default') {
+      const memoryOption = server.memoryOptions?.find(opt => opt.code === selectedMemory);
+      console.log(`内存选项 - 原始API值: "${selectedMemory}", 显示值: "${memoryOption?.formatted}"`);
+      options.push({
+        family: 'memory',
+        option: selectedMemory // 使用原始API值
       });
     }
     
-    if (selectedStorage) {
-      options.push({ 
-        label: 'storage', 
-        value: selectedStorage 
+    // 存储选项
+    if (selectedStorage && selectedStorage !== 'default') {
+      const storageOption = server.storageOptions?.find(opt => opt.code === selectedStorage);
+      console.log(`存储选项 - 原始API值: "${selectedStorage}", 显示值: "${storageOption?.formatted}"`);
+      options.push({
+        family: 'storage',
+        option: selectedStorage // 使用原始API值
       });
     }
     
-    if (selectedBandwidth) {
-      options.push({ 
-        label: 'bandwidth', 
-        value: selectedBandwidth 
+    // 带宽选项
+    if (selectedBandwidth && selectedBandwidth !== 'default') {
+      const bandwidthOption = server.bandwidthOptions?.find(opt => opt.code === selectedBandwidth);
+      console.log(`带宽选项 - 原始API值: "${selectedBandwidth}", 显示值: "${bandwidthOption?.formatted}"`);
+      options.push({
+        family: 'bandwidth',
+        option: selectedBandwidth // 使用原始API值
       });
     }
     
-    if (selectedVrack) {
-      options.push({ 
-        label: 'vrack', 
-        value: selectedVrack 
+    // vRack选项
+    if (selectedVrack && selectedVrack !== 'default') {
+      const vrackOption = server.vrackOptions?.find(opt => opt.code === selectedVrack);
+      console.log(`vRack选项 - 原始API值: "${selectedVrack}", 显示值: "${vrackOption?.formatted}"`);
+      options.push({
+        family: 'vrack',
+        option: selectedVrack // 使用原始API值
       });
     }
     
-    console.log("生成选项列表:", options);
+    console.log("最终生成的选项列表(原始API值):", options);
     return options;
   };
   
@@ -420,15 +435,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
     
     // 只有当真正改变了选项时才更新状态
     if (isRealChange) {
-      // 标记配置已变更，但不重置确认状态
-      // 只有在用户点击确认按钮时，才会重新检查和设置确认状态
       setConfigChanged(true);
-      
+      setConfigConfirmed(false);
       // 如果配置已变更，清除特定配置可用性显示状态
       if (showingConfigSpecificAvailability) {
         setShowingConfigSpecificAvailability(false);
       }
-      
       console.log(`已选择 ${family} 配置: ${optionCode} (${displayText}), 配置已更改，需要确认整体配置`);
     } else {
       console.log(`重新选择了相同的 ${family} 配置: ${optionCode} (${displayText}), 无需更改状态`);
@@ -530,105 +542,6 @@ const ServerCard: React.FC<ServerCardProps> = ({
     });
   };
   
-  // 添加到抢购队列
-  const handleAddToQueue = async () => {
-    try {
-      setIsAddingToQueue(true);
-      
-      // 如果没有选择数据中心，显示提示
-      if (selectedDatacenters.length === 0) {
-        toast({
-          title: "未选择数据中心",
-          description: "请至少选择一个数据中心添加到抢购队列",
-          variant: "destructive",
-        });
-        setIsAddingToQueue(false);
-        return;
-      }
-      
-      // 在开始前显示提示
-      toast({
-        title: "正在添加...",
-        description: `正在将 ${server.name} 添加到抢购队列`,
-      });
-      
-      // 特殊服务器型号列表 - 需要使用无选项下单的服务器
-      const specialServers = ["25skc01", "24ska01"];
-      // 检查是否需要使用默认配置API：
-      // 1. 是特殊服务器型号 或
-      // 2. 没有真正的可选配置 或 
-      // 3. 用户没有改变过配置（只是点击了确认按钮）
-      const shouldUseDefaultApi = 
-        specialServers.includes(server.planCode) || 
-        !hasRealOptions || 
-        (configConfirmed && !configChanged);
-      
-      // 为每个选中的数据中心创建任务
-      for (const datacenterId of selectedDatacenters) {
-        // 如果是特殊服务器或没有真正的可选配置，使用无选项下单API
-        if (shouldUseDefaultApi) {
-          const taskName = `${server.name} (${datacenterId})`;
-          console.log(`为服务器 ${server.planCode} 使用默认配置下单，数据中心: ${datacenterId}, 原因: ${
-            specialServers.includes(server.planCode) ? '特殊服务器型号' : 
-            !hasRealOptions ? '无多种配置选项' : 
-            '用户未更改默认配置'
-          }`);
-          
-          // 调用无选项下单API
-          await apiService.createDefaultTask(taskName, server.planCode, datacenterId);
-        } else {
-          // 正常下单流程
-          // 收集已选择的配置并转换为后端期望的格式
-          const frontendOptions = getSelectedOptions();
-          console.log("前端选项格式:", frontendOptions);
-          
-          // 创建服务器配置对象
-          const serverConfig: ServerConfig = {
-            name: `${server.name} (${datacenterId})`,
-            planCode: server.planCode,
-            options: frontendOptions, // 前端选项现在已经是后端期望的格式
-            duration: "P1M", // ISO 8601 duration 格式，"P1M"代表一个月
-            datacenter: datacenterId,
-            quantity: 1, // 默认数量
-            os: "none_64.en", // 使用正确的默认操作系统值
-            maxRetries: -1, // 设置为无限重试
-            taskInterval: 60 // 设置为60秒间隔
-          };
-          
-          console.log(`为数据中心 ${datacenterId} 发送配置:`, serverConfig);
-          
-          // 调用API创建抢购任务
-          await apiService.createTask(serverConfig);
-        }
-      }
-      
-      // 更新任务列表
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      
-      // 显示成功消息
-      toast({
-        title: "添加成功",
-        description: `已将 ${server.name} 添加到抢购队列，共 ${selectedDatacenters.length} 个数据中心`,
-        variant: "default",
-      });
-      
-      // 清空选择的数据中心
-      setSelectedDatacenters([]);
-      
-      // 导航到抢购队列页面
-      navigate('/queue');
-    } catch (error) {
-      console.error('添加到抢购队列失败:', error);
-      toast({
-        title: "添加失败",
-        description: "无法将服务器添加到抢购队列，请重试",
-        variant: "destructive",
-      });
-    } finally {
-      setIsAddingToQueue(false);
-    }
-  };
-  
   // 获取格式化的上次检查时间
   const getLastCheckedTime = (): string | null => {
     const configFQN = generateConfigFQN();
@@ -649,13 +562,79 @@ const ServerCard: React.FC<ServerCardProps> = ({
   // 检查是否是特殊服务器型号
   const isSpecialServer = specialServers.includes(server.planCode);
   
+  // **** 定义 isDefaultConfig ****
+  const isDefaultConfig = isSpecialServer || !hasRealOptions;
+  
+  // 添加到抢购队列
+  const handleAddToQueue = async () => {
+    if (selectedDatacenters.length === 0) {
+      toast({ title: "请选择数据中心", description: "请至少选择一个要抢购的数据中心", variant: "destructive" });
+      return;
+    }
+
+    // 根据 isDefaultConfig 决定执行路径
+    if (isDefaultConfig) {
+      // ---- 处理默认配置服务器 (调用 /api/queue/new) ----
+      setIsAddingToQueue(true);
+      try {
+        for (const datacenterId of selectedDatacenters) {
+          const taskName = `${server.name} (${datacenterId})`;
+          console.log(`为服务器 ${server.planCode} 使用默认配置下单 (调用 /api/queue/new)，数据中心: ${datacenterId}`);
+          await apiService.createDefaultTask(taskName, server.planCode, datacenterId);
+        }
+        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        toast({ title: "添加成功", description: `已将 ${server.name} 添加到抢购队列 (默认配置)`, variant: "default" });
+        setSelectedDatacenters([]);
+        navigate('/queue');
+      } catch (error) {
+        console.error('添加到抢购队列失败 (默认配置):', error);
+        toast({ title: "添加失败", description: "无法将服务器添加到抢购队列", variant: "destructive" });
+      } finally {
+        setIsAddingToQueue(false);
+      }
+    } else {
+      // ---- 处理带选项服务器 (调用 /api/tasks) ----
+      // 必须先确认配置
+      if (!configConfirmed) {
+        toast({ title: "请先确认配置", description: "请点击\"确认当前配置\"按钮", variant: "default" });
+        return;
+      }
+
+      setIsAddingToQueue(true);
+      try {
+        for (const datacenterId of selectedDatacenters) {
+          const selectedOptionsRaw = getSelectedOptions(); // 获取当前state中的选项
+          const backendOptions = selectedOptionsRaw.map(opt => ({ label: opt.family, value: opt.option }));
+          const payload = {
+            name: `${server.name} (${datacenterId})`,
+            planCode: server.planCode,
+            datacenter: datacenterId,
+            options: backendOptions,
+          };
+          console.log(`为数据中心 ${datacenterId} 发送精确载荷 (调用 /api/tasks):`, JSON.stringify(payload));
+          await apiService.createTask(payload as any);
+        }
+        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        toast({ title: "添加成功", description: `已将 ${server.name} 添加到抢购队列 (${selectedDatacenters.length}个数据中心)`, variant: "default" });
+        setSelectedDatacenters([]);
+        navigate('/queue');
+      } catch (error) {
+        console.error('添加到抢购队列失败 (带选项):', error);
+        toast({ title: "添加失败", description: "无法将服务器添加到抢购队列", variant: "destructive" });
+      } finally {
+        setIsAddingToQueue(false);
+      }
+    }
+  };
+  
   return (
     <Card className="tech-card h-full group">
       <CardHeader className="pb-2">
         <div className="flex justify-between">
           <CardTitle className="text-base font-medium flex items-center">
             <span>{server.name}</span>
-            {(isSpecialServer || !hasRealOptions) && (
+            {/* 使用 isDefaultConfig 控制标识显示 */} 
+            {isDefaultConfig && (
               <div className="ml-2 text-xs px-2 py-0.5 rounded-md bg-amber-50 text-amber-600 border border-amber-200">默认配置</div>
             )}
           </CardTitle>
@@ -663,7 +642,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </div>
         <CardDescription className="line-clamp-1" title={server.description}>
           {server.description || server.planCode}
-          {(isSpecialServer || !hasRealOptions) && (
+          {/* 使用 isDefaultConfig 控制描述文本 */} 
+          {isDefaultConfig && (
             <span className="text-xs text-amber-600 block mt-1">
               此服务器将使用默认配置下单
             </span>
@@ -732,8 +712,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </div>
         </div>
         
-        {/* 显示可选配置参数 */}
-        {hasRealOptions && (
+        {/* 可选配置 UI - 仅当 !isDefaultConfig 时显示 */} 
+        {!isDefaultConfig && (
           <div className="mt-2">
             <Button 
               variant="ghost" 
@@ -897,13 +877,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   </div>
                 </Tabs>
                 
-                {/* 确认配置按钮 */}
+                {/* "确认当前配置" 按钮 */} 
                 <Button 
                   variant={configChanged ? "default" : "outline"}
                   size="sm" 
                   className={`w-full mt-4 text-xs ${configChanged ? "bg-tech-blue hover:bg-tech-blue/90" : ""}`}
                   disabled={isChecking}
-                  onClick={handleCheckConfigAvailability}
+                  onClick={handleCheckConfigAvailability} // 点击调用确认逻辑
                 >
                   {isChecking ? (
                     <>
@@ -916,7 +896,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   ) : (
                     <>
                       <RefreshCw className="h-3 w-3 mr-1" />
-                      {configConfirmed ? "已确认当前配置" : "确认当前全部配置"}
+                      {configConfirmed ? "已确认当前配置" : "确认当前配置"} 
                     </>
                   )}
                 </Button>
@@ -931,45 +911,39 @@ const ServerCard: React.FC<ServerCardProps> = ({
           <div className="text-base font-medium">
             {server.price}
           </div>
-          <div className="flex gap-2">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="h-8"
-              disabled={isChecking}
+          {/* 为默认配置服务器在价格右侧添加检查可用性按钮 */}
+          {isDefaultConfig && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex items-center space-x-1 px-2 py-1 h-auto text-xs" // Smaller padding and text
               onClick={handleCheckDefaultAvailability}
+              disabled={isChecking}
             >
               {isChecking ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-foreground" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  检查中
-                </>
+                <RefreshCw className="h-3 w-3 animate-spin" />
               ) : (
-                <>
-                  <Monitor className="h-4 w-4 mr-1" />
-                  确认默认配置
-                </>
+                <Radio className="h-3 w-3" /> // Smaller icon
               )}
+              <span>{isChecking ? "检查中" : "检查可用性"}</span>
             </Button>
-          </div>
+          )}
         </div>
         
         <div className="text-xs text-muted-foreground mt-1">
           {(isChecked || localLastChecked) && getLastCheckedTime() && (
             <div>最后检查: {getLastCheckedTime()}</div>
           )}
-          {configChanged && (
-            <div className="text-tech-blue">* 配置已更改，请确认配置</div>
+          {/* 条件显示状态提示 - 仅当 !isDefaultConfig */} 
+          {!isDefaultConfig && configChanged && (
+            <div className="text-tech-blue">* 配置已更改，请点击上方"确认当前配置"按钮</div>
           )}
-          {configConfirmed && (
+          {!isDefaultConfig && configConfirmed && (
             <div className="text-tech-green">* 配置已确认，可以添加到抢购队列</div>
           )}
         </div>
         
-        {/* 添加FQN显示在确认配置下方，仅在开发模式下显示 */}
+        {/* FQN Debug 信息 */} 
         {import.meta.env.DEV && showingConfigSpecificAvailability && configConfirmed && (
           <div className="mt-1 p-1 bg-gray-800 rounded-md border border-dashed border-gray-700">
             <div className="text-[10px] text-gray-400 flex items-center">
@@ -980,7 +954,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         )}
       </CardContent>
       <CardFooter className="flex flex-col pt-2 pb-3 px-6">
-        {/* 选择数据中心区域 */}
+        {/* 数据中心选择 */} 
         <div className="w-full mb-3">
           <div className="flex justify-between items-center mb-3">
             <div className="flex items-center">
@@ -1149,37 +1123,42 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </div>
         </div>
         
-        {/* 添加抢购按钮区域 - 样式优化 */}
+        {/* 主操作按钮 */} 
         <div className="w-full">
           <Button 
             size="sm" 
-            className={`w-full relative overflow-hidden ${
-              !configConfirmed || selectedDatacenters.length === 0 ? 
-              'bg-gray-700 hover:bg-gray-600 text-gray-300' : 
-              'bg-gradient-to-r from-tech-blue to-tech-blue/80 hover:from-tech-blue/90 hover:to-tech-blue/70 text-white shadow-md shadow-tech-blue/20'
+            className={`w-full relative overflow-hidden ${ 
+              isDefaultConfig 
+                ? (selectedDatacenters.length === 0 
+                    ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' 
+                    : 'bg-gradient-to-r from-tech-green to-tech-green/80 hover:from-tech-green/90 hover:to-tech-green/70 text-white shadow-md shadow-tech-green/20') // 默认配置按钮样式
+                : (!configConfirmed || selectedDatacenters.length === 0 
+                    ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' 
+                    : 'bg-gradient-to-r from-tech-blue to-tech-blue/80 hover:from-tech-blue/90 hover:to-tech-blue/70 text-white shadow-md shadow-tech-blue/20') // 带选项按钮样式
             }`}
             onClick={handleAddToQueue}
-            disabled={!configConfirmed || selectedDatacenters.length === 0 || isAddingToQueue}
+            disabled={ // 根据 isDefaultConfig 和 configConfirmed 设置 disabled 状态
+              isDefaultConfig 
+                ? (selectedDatacenters.length === 0 || isAddingToQueue) // 默认配置：仅检查数据中心选择和加载状态
+                : (!configConfirmed || selectedDatacenters.length === 0 || isAddingToQueue) // 带选项：检查配置确认、数据中心选择和加载状态
+            }
           >
             {isAddingToQueue ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span>添加中...</span>
-              </>
+              <>...</> // 加载中指示器
             ) : (
               <>
                 <Plus className="h-4 w-4 mr-1" />
-                <span>{
-                  !configConfirmed ? "请先确认配置" : 
-                  selectedDatacenters.length === 0 ? "请选择数据中心" : 
-                  `添加抢购 (${selectedDatacenters.length}个数据中心)`
+                <span>{ // 根据 isDefaultConfig 和状态设置按钮文本
+                  isDefaultConfig 
+                    ? (selectedDatacenters.length === 0 ? "请选择数据中心" : "一键下单") // 默认配置按钮文本
+                    : (!configConfirmed ? "请先确认配置" : 
+                       selectedDatacenters.length === 0 ? "请选择数据中心" : 
+                       `添加抢购 (${selectedDatacenters.length}个数据中心)`) // 带选项按钮文本
                 }</span>
                 
-                {/* 发光效果，只在启用状态显示 */}
-                {configConfirmed && selectedDatacenters.length > 0 && (
+                {/* 发光效果 */}
+                {((isDefaultConfig && selectedDatacenters.length > 0) || 
+                 (!isDefaultConfig && configConfirmed && selectedDatacenters.length > 0)) && (
                   <div className="absolute inset-0 overflow-hidden">
                     <div className="w-10 h-full absolute top-0 -left-10 bg-white/10 transform rotate-12 transition-all duration-1000 animate-shine"></div>
                   </div>
@@ -1189,7 +1168,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </Button>
         </div>
         
-        {/* 添加调试按钮，仅在开发环境显示 */}
+        {/* Debug 按钮 */} 
         {import.meta.env.DEV && (
           <div className="flex justify-end mt-2">
             <div className="text-xs opacity-40 hover:opacity-100">

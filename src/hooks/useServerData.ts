@@ -190,10 +190,22 @@ const formatServerData = (catalog: ProductCatalog): FormattedServer[] => {
         return [];
       }
       
-      return family.addons.map(addonCode => ({
-        code: String(addonCode),
-        formatted: formatAddonName(String(addonCode), familyName)
-      }));
+      // 添加更详细的日志记录
+      console.log(`处理服务器 ${plan.planCode} 的 ${familyName} 选项:`);
+      const addons = family.addons.map(addonCode => {
+        const originalCode = String(addonCode); // 保存原始API字符串值
+        const formattedName = formatAddonName(originalCode, familyName); // 格式化显示值
+        
+        // 记录原始值与格式化值的对应关系
+        console.log(`  - 原始API值: "${originalCode}", 格式化后显示值: "${formattedName}"`);
+        
+        return {
+          code: originalCode, // 保存OVH API返回的原始值
+          formatted: formattedName // 格式化后的用户友好显示值
+        };
+      });
+      
+      return addons;
     };
     
     // 提取默认规格信息
