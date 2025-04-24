@@ -783,7 +783,7 @@ async def order_server(task_id: str, config: ServerConfig):
     task_logger.info(f"用户请求选项值: {wanted_options_values}")
 
     update_task_status(task_id, "running", "检查服务器可用性...")
-    
+        
     # --- 可用性检查 (保持不变，只检查 planCode) ---
     available_dc = None
     found_available = False
@@ -807,14 +807,14 @@ async def order_server(task_id: str, config: ServerConfig):
                 datacenter_name = dc_info.get("datacenter")
                 if datacenter_name and target_dc_upper and datacenter_name.upper() == target_dc_upper:
                     if availability not in ["unavailable", "unknown", None]:
-                        found_available = True
+                            found_available = True
                         available_dc = datacenter_name
                         task_logger.info(f"在数据中心 {available_dc} 找到基础 planCode {config.planCode} 可用 (FQN 可能不同: {current_fqn})!")
-                        break
+                            break
             if found_available: break
         
         if not found_available:
-            # ... (handle not found in target DC) ...
+             # ... (handle not found in target DC) ...
             message = f"计划代码 {config.planCode} 在数据中心 {config.datacenter} 当前无可用服务器。"
             task_logger.info(message)
             update_task_status(task_id, "pending", message)
@@ -822,10 +822,7 @@ async def order_server(task_id: str, config: ServerConfig):
             
         # --- 开始购买流程 --- 
         msg = f"{api_config.iam}: 在 {available_dc} 找到基础 {config.planCode} 可用，准备下单包含选项的订单..."
-        # 注释掉这行，不在找到服务器可用时发送Telegram通知
-        # send_telegram_msg(msg)
-        # 仅记录日志
-        task_logger.info(msg)
+            send_telegram_msg(msg)
         
         # 1. 创建购物车
         update_task_status(task_id, "running", "创建购物车...")
@@ -942,7 +939,7 @@ async def order_server(task_id: str, config: ServerConfig):
                         task_logger.info(f"找到匹配的 Eco 选项: {avail_opt_plan_code} (匹配用户请求: {wanted_value_matched})，准备添加到购物车...")
                         try:
                             # ** Crucial: Add itemId to the payload for POST /eco/options **
-                            option_payload = {
+                    option_payload = {
                                 "itemId": item_id, # Link option to the base item
                                 "planCode": avail_opt_plan_code, # Use the exact plan code from the API
                                 "duration": avail_opt.get("duration", config.duration), # Use option's duration or fallback
@@ -1036,8 +1033,8 @@ async def order_server(task_id: str, config: ServerConfig):
             # 其他API错误仍然按原来方式处理
             error_msg = f"OVH API 操作失败: {error_str}"
             add_log("error", error_msg)
-        add_log("error", error_msg)
-        update_task_status(task_id, "error", error_msg)
+        task_logger.error(error_msg)
+            update_task_status(task_id, "error", error_msg)
         
         # 记录查询ID，便于调试
         if "OVH-Query-ID:" in error_str:
@@ -1059,10 +1056,10 @@ async def order_server(task_id: str, config: ServerConfig):
         
         # 仅在非不可用错误时广播失败消息
         if not is_unavailable_error:
-            await broadcast_order_failed(history_entry)
+        await broadcast_order_failed(history_entry)
             error_tg_msg = f"{api_config.iam}: OVH 操作失败 - {error_str}"
             if cart_id: error_tg_msg += f"\nCart ID: {cart_id}"
-            send_telegram_msg(error_tg_msg)
+        send_telegram_msg(error_tg_msg)
         else:
             # 对于不可用错误，只广播消息到前端，不发送Telegram通知
             await broadcast_order_failed(history_entry)
@@ -1111,7 +1108,7 @@ def update_task_status(task_id: str, status: str, message: Optional[str] = None)
         # Broadcast task update
         try:
             # Run broadcast in background to avoid blocking
-            asyncio.create_task(broadcast_message({
+        asyncio.create_task(broadcast_message({
             "type": "task_updated",
             "data": task.dict()
         }))
@@ -1120,7 +1117,7 @@ def update_task_status(task_id: str, status: str, message: Optional[str] = None)
         
         # Save tasks to file (maybe less frequently?)
         save_tasks_to_file()
-    else:
+            else:
         add_log("warning", f"尝试更新不存在的任务状态: {task_id}")
 
 @app.delete("/api/tasks")

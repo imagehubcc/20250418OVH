@@ -19,7 +19,8 @@ import {
   Filter,
   List,
   Grid,
-  RotateCw
+  RotateCw,
+  Eye
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -56,10 +57,23 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import {
+  ToggleGroup,
+  ToggleGroupItem
+} from "@/components/ui/toggle-group";
 
-type StatusFilter = 'all' | 'success' | 'error';
+type StatusFilter = 'all' | 'success' | 'error' | 'retrying';
 
 type ViewMode = 'grid' | 'list';
 
@@ -72,6 +86,7 @@ const HistoryPage: React.FC = () => {
   const [orderToDelete, setOrderToDelete] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedError, setSelectedError] = useState<string | null>(null);
   
   useEffect(() => {
     const webSocketManager = apiService.webSocketManager;
@@ -176,34 +191,104 @@ const HistoryPage: React.FC = () => {
     setOrderToDelete(null);
   };
   
-  const getStatusIcon = (status: string) => {
-    return status === 'success' ? 
-      <CheckCircle className="h-5 w-5 text-tech-green" /> : 
-      <AlertTriangle className="h-5 w-5 text-tech-red" />;
+  const getStatusIcon = (status: string, error?: string) => {
+    // 检查是否是服务器配置暂时不可用
+    const isUnavailableError = error && (
+      error.includes("不可用") || 
+      error.includes("暂时不可用") || 
+      error.includes("is not available in")
+    );
+    
+    if (status === 'success') {
+      return <CheckCircle className="h-5 w-5 text-tech-green" />;
+    } else if (isUnavailableError) {
+      return <Clock className="h-5 w-5 text-tech-yellow" />;
+    } else {
+      return <AlertTriangle className="h-5 w-5 text-tech-red" />;
+    }
   };
   
-  const getStatusLabel = (status: string) => {
-    return status === 'success' ? '成功' : '失败';
+  const getStatusLabel = (status: string, error?: string) => {
+    // 检查是否是服务器配置暂时不可用
+    const isUnavailableError = error && (
+      error.includes("不可用") || 
+      error.includes("暂时不可用") || 
+      error.includes("is not available in")
+    );
+    
+    if (status === 'success') {
+      return '成功';
+    } else if (isUnavailableError) {
+      return '待重试';
+    } else {
+      return '失败';
+    }
   };
   
-  const getStatusClass = (status: string) => {
-    return status === 'success' ? 
-      'bg-tech-green/20 text-tech-green' : 
-      'bg-tech-red/20 text-tech-red';
+  const getStatusClass = (status: string, error?: string) => {
+    // 检查是否是服务器配置暂时不可用
+    const isUnavailableError = error && (
+      error.includes("不可用") || 
+      error.includes("暂时不可用") || 
+      error.includes("is not available in")
+    );
+    
+    if (status === 'success') {
+      return 'bg-tech-green/20 text-tech-green';
+    } else if (isUnavailableError) {
+      return 'bg-tech-yellow/20 text-tech-yellow';
+    } else {
+      return 'bg-tech-red/20 text-tech-red';
+    }
   };
   
   const formatTime = (timestamp: string | undefined) => {
     if (!timestamp) return '未知时间';
     try {
-      return formatDistanceToNow(new Date(timestamp), { addSuffix: true, locale: zhLocale });
+      const date = new Date(timestamp);
+      // 使用本地格式展示时间，更加直观
+      return date.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
     } catch (e) {
       return '未知时间';
     }
   };
   
+  // 返回格式化的错误信息，优化显示效果
+  const formatErrorMessage = (error?: string) => {
+    if (!error) return '无详细信息';
+    
+    // 简化服务器不可用的错误信息
+    if (error.includes("is not available in")) {
+      const matches = error.match(/(.+) is not available in (.+)/);
+      if (matches && matches.length > 2) {
+        const config = matches[1];
+        const datacenter = matches[2];
+        return `配置 ${config} 在 ${datacenter} 数据中心暂不可用`;
+      }
+    }
+    
+    // 截断过长的错误信息以适应展示空间
+    return error.length > 80 ? error.substring(0, 77) + '...' : error;
+  };
+  
   const filteredOrders = orders
     .filter((order) => {
       if (statusFilter === 'all') return true;
+      if (statusFilter === 'retrying') {
+        // 检查是否是待重试的订单
+        return order.status !== 'success' && order.error && (
+          order.error.includes("不可用") || 
+          order.error.includes("暂时不可用") || 
+          order.error.includes("is not available in")
+        );
+      }
       return statusFilter === order.status;
     })
     .filter((order) => {
@@ -221,7 +306,20 @@ const HistoryPage: React.FC = () => {
   const orderStats = {
     all: orders.length,
     success: orders.filter(o => o.status === 'success').length,
-    error: orders.filter(o => o.status !== 'success').length,
+    retrying: orders.filter(o => 
+      o.status !== 'success' && o.error && (
+        o.error.includes("不可用") || 
+        o.error.includes("暂时不可用") || 
+        o.error.includes("is not available in")
+      )
+    ).length,
+    error: orders.filter(o => 
+      o.status !== 'success' && (!o.error || !(
+        o.error.includes("不可用") || 
+        o.error.includes("暂时不可用") || 
+        o.error.includes("is not available in")
+      ))
+    ).length,
   };
   
   const renderConnectionStatus = () => {
@@ -270,9 +368,9 @@ const HistoryPage: React.FC = () => {
             <TableRow key={order.id} className="group">
               <TableCell>
                 <div className="flex items-center space-x-2">
-                  {getStatusIcon(order.status)}
-                  <Badge variant="outline" className={getStatusClass(order.status)}>
-                    {getStatusLabel(order.status)}
+                  {getStatusIcon(order.status, order.error)}
+                  <Badge variant="outline" className={getStatusClass(order.status, order.error)}>
+                    {getStatusLabel(order.status, order.error)}
                   </Badge>
                 </div>
               </TableCell>
@@ -300,18 +398,33 @@ const HistoryPage: React.FC = () => {
                   )
                 ) : '无订单号'}
               </TableCell>
-              <TableCell className="max-w-[300px] truncate" title={order.error}>
-                {order.error || '无详细信息'}
+              <TableCell className="max-w-[300px]">
+                {order.error && (
+                  <div className={`text-sm truncate ${getStatusClass(order.status, order.error)}`}>
+                    {order.status === 'success' ? (
+                      <CheckCircle className="h-3 w-3 inline mr-1" />
+                    ) : getStatusLabel(order.status, order.error) === '待重试' ? (
+                      <Clock className="h-3 w-3 inline mr-1" />
+                    ) : (
+                      <AlertTriangle className="h-3 w-3 inline mr-1" />
+                    )}
+                    {formatErrorMessage(order.error)}
+                    <Button
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-6 w-6 p-0 ml-1 text-muted-foreground hover:text-foreground"
+                      onClick={() => setSelectedError(order.error)}
+                    >
+                      <Eye className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
               </TableCell>
               <TableCell>
                 <div className="text-sm">
                   <div className="flex items-center text-muted-foreground">
                     <Calendar className="h-3 w-3 mr-1" />
-                    {new Date(order.orderTime).toLocaleDateString()}
-                  </div>
-                  <div className="flex items-center text-muted-foreground">
-                    <Clock className="h-3 w-3 mr-1" />
-                    {new Date(order.orderTime).toLocaleTimeString()}
+                    {formatTime(order.orderTime)}
                   </div>
                 </div>
               </TableCell>
@@ -355,10 +468,10 @@ const HistoryPage: React.FC = () => {
           >
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className={getStatusClass(order.status)}>
+                <Badge variant="outline" className={getStatusClass(order.status, order.error)}>
                   <div className="flex items-center space-x-1">
-                    {getStatusIcon(order.status)}
-                    <span>{getStatusLabel(order.status)}</span>
+                    {getStatusIcon(order.status, order.error)}
+                    <span>{getStatusLabel(order.status, order.error)}</span>
                   </div>
                 </Badge>
                 <Button
@@ -396,19 +509,29 @@ const HistoryPage: React.FC = () => {
                 </p>
               )}
               {order.error && (
-                <p className="text-sm mb-2 text-tech-red truncate" title={order.error}>
-                  <AlertTriangle className="h-3 w-3 inline mr-1" />
-                  {order.error}
+                <p className={`text-sm mb-2 truncate ${getStatusClass(order.status, order.error)}`} title={order.error}>
+                  {order.status === 'success' ? (
+                    <CheckCircle className="h-3 w-3 inline mr-1" />
+                  ) : getStatusLabel(order.status, order.error) === '待重试' ? (
+                    <Clock className="h-3 w-3 inline mr-1" />
+                  ) : (
+                    <AlertTriangle className="h-3 w-3 inline mr-1" />
+                  )}
+                  {formatErrorMessage(order.error)}
+                  <Button
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-6 w-6 p-0 ml-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => setSelectedError(order.error)}
+                  >
+                    <Eye className="h-3 w-3" />
+                  </Button>
                 </p>
               )}
               <div className="text-sm">
                 <div className="flex items-center text-muted-foreground mb-2">
                   <Calendar className="h-4 w-4 mr-1" />
-                  {new Date(order.orderTime).toLocaleDateString()}
-                </div>
-                <div className="flex items-center text-muted-foreground">
-                  <Clock className="h-4 w-4 mr-1" />
-                  {new Date(order.orderTime).toLocaleTimeString()}
+                  {formatTime(order.orderTime)}
                 </div>
               </div>
             </CardContent>
@@ -510,6 +633,15 @@ const HistoryPage: React.FC = () => {
               成功 ({orderStats.success})
             </Button>
             <Button
+              variant={statusFilter === 'retrying' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setStatusFilter('retrying')}
+              className={statusFilter === 'retrying' ? 'bg-tech-yellow hover:bg-tech-yellow/80' : ''}
+            >
+              <Clock className="mr-1 h-4 w-4" />
+              待重试 ({orderStats.retrying})
+            </Button>
+            <Button
               variant={statusFilter === 'error' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setStatusFilter('error')}
@@ -597,6 +729,22 @@ const HistoryPage: React.FC = () => {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        
+        {/* 错误详情对话框 */}
+        <Dialog open={!!selectedError} onOpenChange={(open) => !open && setSelectedError(null)}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>错误详情</DialogTitle>
+              <DialogDescription>完整的错误信息</DialogDescription>
+            </DialogHeader>
+            <div className="bg-muted p-4 rounded-md overflow-auto max-h-[300px] font-mono text-sm whitespace-pre-wrap">
+              {selectedError}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSelectedError(null)}>关闭</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

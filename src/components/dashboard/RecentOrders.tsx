@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { formatDistanceToNow } from 'date-fns';
 import { zhLocale } from '@/lib/locale';
-import { CheckCircle, XCircle, ExternalLink, ArrowRight } from 'lucide-react';
+import { CheckCircle, XCircle, ExternalLink, ArrowRight, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { apiService } from '@/services/api';
@@ -32,6 +32,44 @@ const RecentOrders: React.FC = () => {
       return '未知时间';
     }
   };
+  
+  // 检查是否是"服务器配置暂时不可用"错误
+  const isTemporaryUnavailable = (error?: string) => {
+    return error && error.includes("服务器配置暂时不可用");
+  };
+  
+  // 获取订单状态图标
+  const getOrderStatusIcon = (order: OrderHistory) => {
+    if (order.status === 'success') {
+      return <CheckCircle className="h-5 w-5 text-tech-green" />;
+    } else if (isTemporaryUnavailable(order.error)) {
+      return <Clock className="h-5 w-5 text-tech-yellow" />;
+    } else {
+      return <XCircle className="h-5 w-5 text-tech-red" />;
+    }
+  };
+  
+  // 获取订单状态标签
+  const getOrderStatusLabel = (order: OrderHistory) => {
+    if (order.status === 'success') {
+      return '成功';
+    } else if (isTemporaryUnavailable(order.error)) {
+      return '重试中';
+    } else {
+      return '失败';
+    }
+  };
+  
+  // 获取订单状态类
+  const getOrderStatusClass = (order: OrderHistory) => {
+    if (order.status === 'success') {
+      return 'tech-badge-green';
+    } else if (isTemporaryUnavailable(order.error)) {
+      return 'tech-badge-yellow';
+    } else {
+      return 'tech-badge-red';
+    }
+  };
 
   return (
     <Card className="tech-card h-full">
@@ -55,19 +93,15 @@ const RecentOrders: React.FC = () => {
                 className="flex items-start space-x-3 p-3 rounded-md border border-border hover:bg-muted/20 transition-colors duration-200"
               >
                 <div className="mt-1">
-                  {order.status === 'success' ? (
-                    <CheckCircle className="h-5 w-5 text-tech-green" />
-                  ) : (
-                    <XCircle className="h-5 w-5 text-tech-red" />
-                  )}
+                  {getOrderStatusIcon(order)}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start">
                     <h4 className="text-sm font-medium truncate" title={order.name}>
                       {order.name}
                     </h4>
-                    <span className={`tech-badge ${order.status === 'success' ? 'tech-badge-green' : 'tech-badge-red'}`}>
-                      {order.status === 'success' ? '成功' : '失败'}
+                    <span className={`tech-badge ${getOrderStatusClass(order)}`}>
+                      {getOrderStatusLabel(order)}
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
@@ -88,7 +122,7 @@ const RecentOrders: React.FC = () => {
                   )}
                   
                   {order.status === 'failed' && order.error && (
-                    <p className="text-xs text-tech-red mt-1 truncate" title={order.error}>
+                    <p className={`text-xs mt-1 truncate ${isTemporaryUnavailable(order.error) ? 'text-tech-yellow' : 'text-tech-red'}`} title={order.error}>
                       {order.error}
                     </p>
                   )}

@@ -13,7 +13,9 @@ import {
   SortAsc, 
   SortDesc,
   X,
-  CheckSquare
+  CheckSquare,
+  AlertCircle,
+  Settings
 } from 'lucide-react';
 import ServerCard from '@/components/servers/ServerCard';
 import { Progress } from '@/components/ui/progress';
@@ -208,6 +210,18 @@ const ServersPage: React.FC = () => {
             <span className="text-sm">已更新服务器可用性</span>
           </div>
         )}
+        
+        {/* 可用性匹配提示 */}
+        <div className="flex items-center ml-2">
+          <AlertCircle className="h-4 w-4 text-amber-500 mr-1" />
+          <span className="text-sm text-amber-500 font-medium">前端显示的可用性状态仅供参考，实际下单结果以系统反馈为准</span>
+        </div>
+        
+        {/* 可选配置提示 */}
+        <div className="flex items-center ml-2">
+          <Settings className="h-4 w-4 text-tech-blue mr-1" />
+          <span className="text-sm text-tech-blue font-medium">系统已支持自定义附加选项配置订购</span>
+        </div>
       </div>
       
       {/* 进度条 */}

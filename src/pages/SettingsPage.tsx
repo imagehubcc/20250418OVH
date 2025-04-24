@@ -76,7 +76,7 @@ const SettingsPage: React.FC = () => {
         <Settings className="h-8 w-8 text-tech-blue mt-1" />
         <div>
           <h1 className="text-2xl font-bold tracking-tight">设置</h1>
-          <p className="text-muted-foreground">配置OVH Titan Sniper系统参数</p>
+          <p className="text-muted-foreground">配置OVH抢购面板系统参数</p>
         </div>
       </div>
       
@@ -141,7 +141,7 @@ const SettingsPage: React.FC = () => {
       
       {/* 版本信息 */}
       <div className="text-center mt-12 text-sm text-muted-foreground">
-        <p>OVH Titan Sniper v1.0</p>
+        <p>OVH抢购面板 v1.0</p>
         <p className="mt-1">© 2025 保留所有权利</p>
       </div>
     </div>

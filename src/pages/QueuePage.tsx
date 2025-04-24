@@ -216,7 +216,11 @@ const QueuePage: React.FC = () => {
     retryOrderMutation.mutate(taskId);
   };
   
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: string, message?: string) => {
+    if (message && message.includes("服务器配置暂时不可用")) {
+      return <Clock className="h-5 w-5 text-tech-yellow" />;
+    }
+    
     switch (status) {
       case 'running':
         return <PlayCircle className="h-5 w-5 text-tech-blue animate-pulse" />;
@@ -226,12 +230,18 @@ const QueuePage: React.FC = () => {
         return <CheckCircle className="h-5 w-5 text-tech-green" />;
       case 'error':
         return <AlertTriangle className="h-5 w-5 text-tech-red" />;
+      case 'max_retries_reached':
+        return <StopCircle className="h-5 w-5 text-tech-red" />;
       default:
         return <FileSearch className="h-5 w-5 text-tech-gray" />;
     }
   };
   
-  const getStatusLabel = (status: string) => {
+  const getStatusLabel = (status: string, message?: string) => {
+    if (message && message.includes("服务器配置暂时不可用")) {
+      return '重试中';
+    }
+    
     switch (status) {
       case 'running':
         return '运行中';
@@ -241,12 +251,18 @@ const QueuePage: React.FC = () => {
         return '已完成';
       case 'error':
         return '错误';
+      case 'max_retries_reached':
+        return '达到重试上限';
       default:
         return '未知';
     }
   };
   
-  const getStatusClass = (status: string) => {
+  const getStatusClass = (status: string, message?: string) => {
+    if (message && message.includes("服务器配置暂时不可用")) {
+      return 'bg-tech-yellow/20 text-tech-yellow';
+    }
+    
     switch (status) {
       case 'running':
         return 'bg-tech-blue/20 text-tech-blue';
@@ -255,6 +271,7 @@ const QueuePage: React.FC = () => {
       case 'completed':
         return 'bg-tech-green/20 text-tech-green';
       case 'error':
+      case 'max_retries_reached':
         return 'bg-tech-red/20 text-tech-red';
       default:
         return 'bg-muted text-muted-foreground';
@@ -277,15 +294,21 @@ const QueuePage: React.FC = () => {
   
   const filteredTasks = tasks.filter((task) => {
     if (statusFilter === 'all') return true;
+    
+    // 特殊情况：将"服务器配置暂时不可用"的任务归类为等待中(pending)
+    if (task.message && task.message.includes("服务器配置暂时不可用")) {
+      return statusFilter === 'pending';
+    }
+    
     return task.status === statusFilter;
   });
   
   const taskStats = {
     all: tasks.length,
     running: tasks.filter(t => t.status === 'running').length,
-    pending: tasks.filter(t => t.status === 'pending').length,
+    pending: tasks.filter(t => t.status === 'pending' || (t.message && t.message.includes("服务器配置暂时不可用"))).length,
     completed: tasks.filter(t => t.status === 'completed').length,
-    error: tasks.filter(t => t.status === 'error').length,
+    error: tasks.filter(t => t.status === 'error' && !(t.message && t.message.includes("服务器配置暂时不可用"))).length,
   };
   
   const renderConnectionStatus = () => {
@@ -334,9 +357,9 @@ const QueuePage: React.FC = () => {
             <TableRow key={task.id} className="group">
               <TableCell>
                 <div className="flex items-center space-x-2">
-                  {getStatusIcon(task.status)}
-                  <Badge variant="outline" className={getStatusClass(task.status)}>
-                    {getStatusLabel(task.status)}
+                  {getStatusIcon(task.status, task.message)}
+                  <Badge variant="outline" className={getStatusClass(task.status, task.message)}>
+                    {getStatusLabel(task.status, task.message)}
                   </Badge>
                 </div>
               </TableCell>
@@ -396,7 +419,7 @@ const QueuePage: React.FC = () => {
   );
   
   const renderGridView = () => (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
       {filteredTasks.length === 0 ? (
         <Card className="col-span-full tech-card p-6 flex flex-col items-center justify-center">
           <FileSearch className="h-12 w-12 text-tech-gray mb-4" />
@@ -416,10 +439,10 @@ const QueuePage: React.FC = () => {
           <Card key={task.id} className="tech-card overflow-hidden group">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className={getStatusClass(task.status)}>
+                <Badge variant="outline" className={getStatusClass(task.status, task.message)}>
                   <div className="flex items-center space-x-1">
-                    {getStatusIcon(task.status)}
-                    <span>{getStatusLabel(task.status)}</span>
+                    {getStatusIcon(task.status, task.message)}
+                    <span>{getStatusLabel(task.status, task.message)}</span>
                   </div>
                 </Badge>
                 <DropdownMenu>
@@ -610,7 +633,7 @@ const QueuePage: React.FC = () => {
       
       {renderError()}
       
-      <div className="flex flex-col sm:flex-row justify-between gap-4">
+      <div className="flex flex-col sm:flex-row justify-between gap-4 mb-6">
         <div className="flex flex-wrap gap-2">
           <Button
             variant={statusFilter === 'all' ? 'default' : 'outline'}
@@ -681,7 +704,7 @@ const QueuePage: React.FC = () => {
       {renderLoading()}
       
       {!isTasksLoading && !tasksError && (
-        <div>
+        <div className="mt-4">
           {viewMode === 'grid' ? renderGridView() : renderListView()}
         </div>
       )}

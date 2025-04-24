@@ -39,7 +39,12 @@ const TasksOverview: React.FC = () => {
     return getStatusPriority(a.status) - getStatusPriority(b.status);
   }).slice(0, 5);
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: string, message?: string) => {
+    // 特殊情况：消息中包含"服务器配置暂时不可用"，显示为等待状态图标
+    if (message && message.includes("服务器配置暂时不可用")) {
+      return <Clock className="h-5 w-5 text-tech-yellow" />;
+    }
+    
     switch (status) {
       case 'running':
         return <PlayCircle className="h-5 w-5 text-tech-blue animate-pulse" />;
@@ -54,7 +59,12 @@ const TasksOverview: React.FC = () => {
     }
   };
 
-  const getStatusLabel = (status: string) => {
+  const getStatusLabel = (status: string, message?: string) => {
+    // 特殊情况：消息中包含"服务器配置暂时不可用"，显示为"重试中"
+    if (message && message.includes("服务器配置暂时不可用")) {
+      return '重试中';
+    }
+    
     switch (status) {
       case 'running':
         return '运行中';
@@ -69,7 +79,12 @@ const TasksOverview: React.FC = () => {
     }
   };
 
-  const getStatusClass = (status: string) => {
+  const getStatusClass = (status: string, message?: string) => {
+    // 特殊情况：消息中包含"服务器配置暂时不可用"，使用黄色等待样式
+    if (message && message.includes("服务器配置暂时不可用")) {
+      return 'tech-badge-yellow';
+    }
+    
     switch (status) {
       case 'running':
         return 'tech-badge-blue';
@@ -131,14 +146,14 @@ const TasksOverview: React.FC = () => {
                 key={task.id}
                 className="flex items-center space-x-3 p-3 rounded-md border border-border hover:bg-muted/20 transition-colors duration-200"
               >
-                <div>{getStatusIcon(task.status)}</div>
+                <div>{getStatusIcon(task.status, task.message)}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start">
                     <h4 className="text-sm font-medium truncate" title={task.name}>
                       {task.name}
                     </h4>
-                    <div className={`tech-badge ${getStatusClass(task.status)}`}>
-                      {getStatusLabel(task.status)}
+                    <div className={`tech-badge ${getStatusClass(task.status, task.message)}`}>
+                      {getStatusLabel(task.status, task.message)}
                     </div>
                   </div>
                   <div className="flex justify-between items-center mt-1">

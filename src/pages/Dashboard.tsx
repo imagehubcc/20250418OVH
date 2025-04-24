@@ -32,10 +32,26 @@ const Dashboard: React.FC = () => {
   const tasks = tasksData || [];
   const orders = ordersData || [];
   
+  // 检查是否是"服务器配置暂时不可用"的消息
+  const isTemporarilyUnavailable = (message?: string) => {
+    return message && message.includes("服务器配置暂时不可用");
+  };
+  
   // 计算统计数据
-  const activeTasksCount = tasks.filter(task => task.status === 'running' || task.status === 'pending').length;
+  const activeTasksCount = tasks.filter(task => 
+    task.status === 'running' || 
+    task.status === 'pending' || 
+    // 添加"服务器配置暂时不可用"的任务到活跃任务计数
+    (task.status === 'error' && isTemporarilyUnavailable(task.message))
+  ).length;
+  
   const completedOrdersCount = orders.filter(order => order.status === 'success').length;
-  const failedOrdersCount = orders.filter(order => order.status === 'failed').length;
+  
+  const failedOrdersCount = orders.filter(order => 
+    order.status === 'failed' && 
+    // 排除"服务器配置暂时不可用"的订单
+    !isTemporarilyUnavailable(order.error)
+  ).length;
   
   // 计算任务成功率
   const successRate = orders.length > 0 

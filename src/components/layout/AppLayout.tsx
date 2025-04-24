@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -67,8 +66,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           >
             {isMobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>
-          <h1 className="ml-2 text-xl font-bold text-tech-blue">
-            <span className="text-white">OVH</span> Titan Sniper
+          <h1 className="ml-2 text-2xl font-bold text-tech-blue">
+            OVH抢购面板
           </h1>
         </div>
         <div className="flex items-center">
@@ -91,8 +90,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         <div className="md:hidden fixed inset-0 z-50 bg-tech-dark/90 backdrop-blur-sm animate-fade-in-up">
           <div className="h-full flex flex-col p-4">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-tech-blue">
-                <span className="text-white">OVH</span> Titan Sniper
+              <h2 className="text-2xl font-bold text-tech-blue">
+                OVH抢购面板
               </h2>
               <button 
                 className="p-2 text-tech-red"
@@ -147,9 +146,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         >
           <div className="h-full flex flex-col p-4">
             <div className="flex items-center justify-between mb-8">
-              <h1 className="text-xl font-bold text-tech-blue flex items-center">
-                <Cpu className="h-6 w-6 mr-2 text-tech-blue animate-pulse-glow" />
-                <span>Titan Sniper</span>
+              <h1 className="text-2xl font-bold text-tech-blue flex items-center">
+                <span>OVH抢购面板</span>
               </h1>
             </div>
 
@@ -175,7 +173,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             <div className="py-4 border-t border-border">
               <div className="flex flex-col space-y-2">
                 <div className="tech-badge tech-badge-blue flex justify-center">
-                  <span>OVH Titan Sniper v1.0</span>
+                  <span>OVH抢购面板 v1.0</span>
                 </div>
                 {isConnected ? (
                   <div className="tech-badge tech-badge-green flex justify-center">
